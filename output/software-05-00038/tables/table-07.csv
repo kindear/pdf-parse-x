@@ -1,4 +1,0 @@
-Workload,Conditions,Transitions,First at p = 8,First at p = 16
-Merge Sort,8,6,5,1
-Closest Pair,8,4,0,4
-Numerical Sum,8,0,0,0

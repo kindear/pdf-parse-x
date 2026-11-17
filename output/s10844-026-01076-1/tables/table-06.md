@@ -1,3 +1,0 @@
-# Table 6 Text8, BNC, and Wiki052024: correlation coefficient ρ for SVD-based methods with p = 0 (or p = 0.5) and k = 300 and for GloVe and SGNS with k = 300. Bold value indicates the highest value for each corpus
-
-![Table 6 Text8, BNC, and Wiki052024: correlation coefficient ρ for SVD-based methods with p = 0 (or p = 0.5) and k = 300 and for GloVe and SGNS with k = 300. Bold value indicates the highest value for each corpus](table-06.png)

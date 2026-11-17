@@ -1,5 +1,0 @@
-Language,Runtime Characteristics,Parallel Mechanism Used
-Rust,Native code; static typing; ownership-based memory management; no tracing GC,Native scoped threads over pinned physical cores
-Julia,LLVM-based JIT; task runtime; garbage collected,Threads.@spawn with explicit task synchronization
-Haskell,Native code through GHC; lazy functional runtime; garbage collected,forkOn workers with MVar-based synchronization
-Python,CPython interpreter; GIL for threads; process-based CPU parallelism,multiprocessing; pickle transport for Merge Sort/Closest Pair and inherited read-only mmap for Numerical Sum
