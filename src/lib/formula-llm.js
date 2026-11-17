@@ -19,15 +19,15 @@ export function getFormulaLlmConfig(options = {}) {
   const env = process.env;
   const baseUrl =
     options.baseUrl ??
-    env.FORMULA_LLM_BASE_URL ??
+    env.LLM_BASE_URL ??
     '';
   const apiKey =
     options.apiKey ??
-    env.FORMULA_LLM_API_KEY ??
+    env.LLM_API_KEY ??
     '';
   const allowNoKey =
     options.allowNoKey ??
-    env.FORMULA_LLM_ALLOW_NO_KEY === 'true';
+    env.LLM_ALLOW_NO_KEY === 'true';
 
   return {
     enabled:
@@ -35,20 +35,20 @@ export function getFormulaLlmConfig(options = {}) {
       (Boolean(baseUrl) && (Boolean(apiKey) || allowNoKey)),
     baseUrl: String(baseUrl).replace(/\/+$/, ''),
     apiKey,
-    model: options.model ?? env.FORMULA_LLM_MODEL ?? 'mimo-flash',
+    model: options.model ?? env.LLM_MODEL ?? 'mimo-flash',
     vision:
       options.vision ??
-      (env.FORMULA_LLM_VISION ?? 'true') !== 'false',
+      (env.LLM_VISION ?? 'true') !== 'false',
     timeoutMs: Number(
-      options.timeoutMs ?? env.FORMULA_LLM_TIMEOUT_MS ?? 30000
+      options.timeoutMs ?? env.LLM_TIMEOUT_MS ?? 30000
     ),
     concurrency: Math.max(
       1,
-      Number(options.concurrency ?? env.FORMULA_LLM_CONCURRENCY ?? 3)
+      Number(options.concurrency ?? env.LLM_CONCURRENCY ?? 3)
     ),
     maxImages: Math.max(
       0,
-      Number(options.maxImages ?? env.FORMULA_LLM_MAX_IMAGES ?? 0)
+      Number(options.maxImages ?? env.LLM_MAX_IMAGES ?? 0)
     ),
     temperature: Number(options.temperature ?? 0)
   };

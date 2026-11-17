@@ -2,6 +2,8 @@ node_modules/
 preview_pages/
 tmp-*
 tmp-output/
+output/
+outputs/
 *.log
 .DS_Store
 .env

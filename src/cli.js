@@ -21,7 +21,7 @@ function usage() {
   --preview（或 PERSIST_PREVIEW=true）会额外写出可双击打开的静态预览文件。
 
 可选环境变量（写在 .env）:
-  FORMULA_LLM_BASE_URL / FORMULA_LLM_API_KEY / FORMULA_LLM_MODEL
+  LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
   未配置时公式回退为 PDF 原图。`);
 }
 

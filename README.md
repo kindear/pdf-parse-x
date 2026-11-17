@@ -220,20 +220,20 @@ output/s10844-026-01076-1/main.md
 2. **OpenAI 兼容公式模型**（例如 Mimo Flash）：
 
    ```bash
-   FORMULA_LLM_BASE_URL=https://api.xiaomimimo.com/v1
-   FORMULA_LLM_API_KEY=sk-...
-   FORMULA_LLM_MODEL=mimo-v2.6-flash
-   FORMULA_LLM_VISION=true
-   FORMULA_LLM_TIMEOUT_MS=120000
-   FORMULA_LLM_CONCURRENCY=3
-   FORMULA_LLM_MAX_IMAGES=0
+   LLM_BASE_URL=https://api.xiaomimimo.com/v1
+   LLM_API_KEY=sk-...
+   LLM_MODEL=mimo-v2.6-flash
+   LLM_VISION=true
+   LLM_TIMEOUT_MS=120000
+   LLM_CONCURRENCY=3
+   LLM_MAX_IMAGES=0
    ```
 
    服务需兼容 `POST /chat/completions`（Mimo 官方接口为 `https://api.xiaomimimo.com/v1`）。模型会收到公式区域截图（可选）和 PDF 文本层上下文，返回 LaTeX；结果必须通过 KaTeX 校验，失败则自动回退到原图。多行公式会被自动包裹为 `gathered` 环境，模型直接返回 `aligned` 时保持原样。
 
-   - `FORMULA_LLM_VISION=false` 时只发送文本层内容，适用于纯文本模型。
-   - `FORMULA_LLM_CONCURRENCY` 控制并发请求数；`FORMULA_LLM_MAX_IMAGES` 限制单次转换最多调用多少个公式（`0` 表示不限）。
-   - 本地无鉴权服务可设置 `FORMULA_LLM_ALLOW_NO_KEY=true`。
+   - `LLM_VISION=false` 时只发送文本层内容，适用于纯文本模型。
+   - `LLM_CONCURRENCY` 控制并发请求数；`LLM_MAX_IMAGES` 限制单次转换最多调用多少个公式（`0` 表示不限）。
+   - 本地无鉴权服务可设置 `LLM_ALLOW_NO_KEY=true`。
    - 该能力默认关闭，不会自动上传 PDF 内容。
    - 可选设置 `FIGURE_LLM_ENABLED=true`，在坐标规则无法关联图片时，将图注所在页面截图发送给同一视觉模型定位并裁剪。结果会在报告中提示人工核对；模型返回的矩形未通过范围/置信度/面积校验时不会采用，改由图注附近空白间隔估算区域。此设置需要配置上面的模型地址、密钥和视觉模式。
    - 视觉模式需要公式截图；截图不可用时直接保留原图，不会悄悄改用可能不完整的文本层。请求失败、超时、服务状态码及 LaTeX 校验失败会在报告中分别提示。调用上限之外的公式也会单独提示。
