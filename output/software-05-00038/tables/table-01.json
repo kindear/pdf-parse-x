@@ -1,0 +1,34 @@
+{
+  "number": 1,
+  "page": 3,
+  "caption": "Table 1. Language-independent structural characteristics of the three benchmark workloads.",
+  "headers": [
+    "Workload",
+    "Local Parallel Work",
+    "Combination Operation",
+    "Workload Structure"
+  ],
+  "rows": [
+    [
+      "Merge Sort",
+      "Sort one contiguous partition per worker",
+      "Pairwise merging of sorted partitions",
+      "Global merge intensive"
+    ],
+    [
+      "Closest Pair",
+      "Search for one spatial region per worker",
+      "Boundary-strip refinement between adjacent regions",
+      "Local search with boundary combination"
+    ],
+    [
+      "Numerical Sum",
+      "Scan and accumulate one region per worker",
+      "Scalar reduction of worker partial sums",
+      "Minimal combination"
+    ]
+  ],
+  "confidence": 1,
+  "imageOnly": false,
+  "image": "tables/table-01.png"
+}

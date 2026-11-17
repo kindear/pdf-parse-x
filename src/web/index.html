@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pdf-parse-x · PDF 转 Markdown</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="page-glow page-glow-one"></div>
+  <div class="page-glow page-glow-two"></div>
+
+  <header class="site-header">
+    <a class="brand" href="/">
+      <span class="brand-mark">P</span>
+      <span>
+        <strong>pdf-parse-x</strong>
+        <small>PDF → Markdown Studio</small>
+      </span>
+    </a>
+    <div class="header-note">
+      <span class="pulse-dot"></span>
+      文本、图片、表格与完整预览
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Node.js · pdf-parse · PDF.js · Sharp</p>
+        <h1>把 PDF 变成<br><span>可读、可核对</span>的 Markdown。</h1>
+        <p class="hero-lead">
+          自动提取正文、章节、内嵌图片与表格，输出结构化的
+          <code>main.md</code>、<code>figs/</code>、<code>tables/</code>，
+          并生成可直接浏览全部内容的 Markdown 预览页。
+        </p>
+        <div class="hero-points">
+          <span>保留图表对应关系</span>
+          <span>表格 Markdown + 原图双保险</span>
+          <span>预览内全文展示</span>
+        </div>
+      </div>
+
+      <div class="upload-card">
+        <div class="upload-card-head">
+          <span class="step-badge">01</span>
+          <div>
+            <h2>上传 PDF</h2>
+            <p>文件只在本机 Node.js 服务中处理。</p>
+          </div>
+        </div>
+
+        <label class="dropzone" id="dropzone" for="pdfInput">
+          <input id="pdfInput" type="file" accept="application/pdf,.pdf">
+          <span class="drop-icon">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14.5V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </span>
+          <strong>拖拽 PDF 到这里</strong>
+          <span>或点击选择文件 · 最大 100 MB</span>
+        </label>
+
+        <div class="progress-wrap" id="progressWrap" hidden>
+          <div class="progress-meta">
+            <span id="progressLabel">正在上传…</span>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="progress-track"><div id="progressBar"></div></div>
+          <ol class="progress-steps" id="progressSteps" hidden></ol>
+        </div>
+
+        <div class="upload-actions">
+          <button class="button primary" id="sampleButton" type="button">
+            解析示例 PDF
+          </button>
+          <span class="upload-hint">或选择自己的论文 / 报告</span>
+        </div>
+
+        <div class="status-box" id="statusBox" hidden></div>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Workspace</p>
+          <h2>已转换文档</h2>
+        </div>
+        <button class="button ghost" id="refreshButton" type="button">刷新列表</button>
+      </div>
+
+      <div class="document-grid" id="documentGrid">
+        <div class="empty-state">
+          <div class="empty-orbit"></div>
+          <h3>还没有转换记录</h3>
+          <p>上传一个 PDF，生成第一份带图表资源的 Markdown 文档。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="feature-strip">
+      <article>
+        <span class="feature-number">01</span>
+        <h3>版式感知提取</h3>
+        <p>结合 PDF.js 文本坐标与 pdf-parse 的文本/图片能力，识别标题、段落、图注和表格边界。</p>
+      </article>
+      <article>
+        <span class="feature-number">02</span>
+        <h3>图表资源落盘</h3>
+        <p>图片写入 <code>figs/</code>，表格同时输出 Markdown、CSV、JSON 与高清截图到 <code>tables/</code>。</p>
+      </article>
+      <article>
+        <span class="feature-number">03</span>
+        <h3>完整内容预览</h3>
+        <p>预览页直接渲染 <code>main.md</code>，正文、表格、图片、目录和资源画廊全部可见。</p>
+      </article>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>pdf-parse-x · local-first PDF conversion</span>
+    <span>Node.js · Express · pdf-parse · PDF.js · Sharp</span>
+  </footer>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

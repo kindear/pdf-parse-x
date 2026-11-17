@@ -1,0 +1,9 @@
+node_modules/
+preview_pages/
+tmp-*
+tmp-output/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example

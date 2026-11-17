@@ -1,0 +1,41 @@
+{
+  "name": "pdf-parse-x",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node.js PDF to Markdown converter with figure/table extraction and a full-content preview.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "convert": "node src/cli.js",
+    "convert:sample": "node src/cli.js pdfs/software-05-00038.pdf output/software-05-00038",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "pdf",
+    "markdown",
+    "pdf-parse",
+    "pdfjs",
+    "tables",
+    "figures"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "katex": "^0.16.25",
+    "marked": "^18.2.1",
+    "multer": "^2.5.0",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.4.296",
+    "sanitize-html": "^2.18.2",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2"
+  }
+}
