@@ -1,0 +1,38 @@
+{
+  "number": 7,
+  "page": 13,
+  "caption": "Table 7. Summary of Bottleneck Transition Points across the 24 workload–size–implementation conditions.",
+  "headers": [
+    "Workload",
+    "Conditions",
+    "Transitions",
+    "First at p = 8",
+    "First at p = 16"
+  ],
+  "rows": [
+    [
+      "Merge Sort",
+      "8",
+      "6",
+      "5",
+      "1"
+    ],
+    [
+      "Closest Pair",
+      "8",
+      "4",
+      "0",
+      "4"
+    ],
+    [
+      "Numerical Sum",
+      "8",
+      "0",
+      "0",
+      "0"
+    ]
+  ],
+  "confidence": 1,
+  "imageOnly": false,
+  "image": "tables/table-07.png"
+}

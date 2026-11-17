@@ -481,13 +481,21 @@ function buildPageBlocks(page, figures, tables, equations, state, unassignedImag
     }
 
     const numberedMatch = text.match(/^(\d+(?:\.\d+)*)\.?\s+(\S.*)$/);
+    // A heading always starts a block: the previous line must have ended a
+    // sentence. Otherwise `… ranges from 7.61 to` + `10.85 across the …` (a
+    // paragraph split by pagination) would be taken for a numbered section.
+    const previousText = previousLine ? normalizeInline(previousLine.text) : '';
+    const startsBlock = !previousText || /[.!?:;)"'\u201d\u2019%]$/.test(previousText);
     const numberedHeading =
       Boolean(numberedMatch) &&
+      startsBlock &&
       line.height >= 9.9 &&
       numberedMatch[1].split('.').length <= 4 &&
       numberedMatch[2].length <= 110 &&
       !/[.;:,]$/.test(numberedMatch[2]) &&
       !/^\d/.test(numberedMatch[2]) &&
+      // 章节标题以大写开头；`800 million elements …` 这类跨页续行不应变成标题。
+      !/^[a-z\u00e0-\u00ff]/.test(numberedMatch[2]) &&
       !/\b(?:is|are|was|were|has|have|can|may|should|would|will)\b/i.test(
         numberedMatch[2]
       );
@@ -704,6 +712,70 @@ function mergeReferenceItems(blocks) {
   return merged;
 }
 
+/**
+ * Structural validation pass. Section numbering is a strong, general signal:
+ * inside `3.` only `3.x` may appear, top-level numbers must increase, and an
+ * unnumbered line inside a numbered section is a lead-in sentence rather than
+ * a heading (e.g. a bold run-in like `Workload Computation-to-Communication
+ * Structure` at the top of a page). Invalid headings degrade to paragraphs so
+ * no text is lost.
+ */
+const STRUCTURE_KEYWORDS =
+  /^(?:abstract|references|bibliography|acknowledg(?:e)?ments?|appendix(?:\s+[a-z0-9]+)?|abbreviations|author contributions?|funding|conflicts? of interest|data availability(?: statement)?|supplementary(?: materials?)?|notes?|disclosure)$/i;
+
+export function validateHeadingStructure(blocks) {
+  const output = [];
+  let topLevel = null;
+  const seenNumbers = new Set();
+
+  const demote = (block) => {
+    output.push({ type: 'paragraph', text: block.text });
+  };
+
+  for (const block of blocks) {
+    if (block.type !== 'heading') {
+      output.push(block);
+      continue;
+    }
+
+    const text = normalizeInline(block.text);
+    if (STRUCTURE_KEYWORDS.test(text.replace(/[.:;]+$/, '').trim())) {
+      output.push(block);
+      continue;
+    }
+
+    const numbered = text.match(/^(\d+(?:\.\d+)*)\.?\s+\S/);
+    if (numbered) {
+      const parts = numbered[1].split('.').map(Number);
+      const valid =
+        parts.length === 1
+          ? parts[0] <= 99 && (topLevel === null || parts[0] > topLevel)
+          : topLevel !== null && parts[0] === topLevel;
+      if (!valid || seenNumbers.has(numbered[1])) {
+        demote(block);
+        continue;
+      }
+      seenNumbers.add(numbered[1]);
+      if (parts.length === 1) topLevel = parts[0];
+      output.push(block);
+      continue;
+    }
+
+    // Roman (`II.`) and lettered (`A.`) subsections stay headings; anything
+    // else unnumbered inside a numbered section is body text.
+    const structural =
+      isRomanSectionHeading(text) || isLetteredSubheading(text);
+    if (topLevel !== null && block.level >= 3 && !structural) {
+      demote(block);
+      continue;
+    }
+
+    output.push(block);
+  }
+
+  return output;
+}
+
 export function buildMarkdown({
   layout,
   pdfTextPages,
@@ -813,7 +885,9 @@ export function buildMarkdown({
     }
   }
 
-  const merged = mergeReferenceItems(mergeCrossPageParagraphs(blocks));
+  const merged = mergeReferenceItems(
+    mergeCrossPageParagraphs(validateHeadingStructure(blocks))
+  );
   const markdown = renderBlocks(merged);
   return {
     markdown: `${markdown}\n\n---\n\n*本文档由 pdf-parse-x 自动转换生成，共 ${layout.totalPages} 页。*`,

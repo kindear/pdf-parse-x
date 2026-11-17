@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "identity": "970e0acffec7118ab2de0bdcaa4191be10e418f04b9cb617fc780dcec36b1a65",
+  "formulas": {
+    "1": "\\mathrm{PMI}(i, j) = \\log \\frac{p_{ij}}{p_{i+} p_{+j}}. \\tag{1}",
+    "2": "\\mathrm{PPMI}(i, j)=\\max \\left( \\mathrm{PMI}(i, j), 0 \\right), \\tag{2}",
+    "3": "\\frac{p_{ij} - p_{i+p+j}}{\\sqrt{p_{i+p+j}}}, \\tag{3}",
+    "4": "\\frac{p_{ij}-p_{i+p+j}}{\\sqrt{p_{i+p+j}}}=\\sum_{k=1}^{\\min(I-1,\\,J-1)}\\sigma_{k}u_{ik}v_{jk}, \\tag{4}",
+    "5": "\\frac{p_{ij}}{p_{i+}+p_{+j}}-1=\\sum_{k=1}^{\\min(I-1,\\,J-1)}\\sigma_k\\phi_{ik}\\gamma_{jk}, \\tag{5}",
+    "6": "\\delta_{ii'}^{2}=\\sum_{j}\\frac{\\left(\\frac{p_{i j}}{p_{i+}}-\\frac{p_{i^{\\prime} j}}{p_{i^{\\prime}+}}\\right)^{2}}{p_{+j}}, \\tag{6}",
+    "7": "\\sum_{i,j} p_i + p_j \\left( \\frac{p_{ij}}{p_i + p_j} - 1 - e_i^{\\mathrm{T}} o_j \\right)^2 , \\tag{7}",
+    "8": "\\sqrt{\\frac{p_{ij}}{\\sqrt{p_{i+}+p_{+j}}}}=\\sum_{k=1}^{\\min(I,J)}\\sigma_k u_{ik}v_{jk}. \\tag{8}",
+    "9": "\\frac{p_{ij}^* - p_{i\\cdot}^* p_{\\cdot j}^*}{\\sqrt{p_{i\\cdot}^* p_{\\cdot j}^*}} = \\sum_{k=1}^{\\min(I-1, J-1)} \\sigma_k u_{ik} v_{jk} \\tag{9}",
+    "10": "\\frac{p_{ij}^{**} - p_{i+}^{**} p_{+j}^{**}}{\\sqrt{p_{i+}^{**} p_{+j}^{**}}} = \\sum_{k=1}^{\\min(I-1,J-1)} \\sigma_k u_{ik} v_{jk} \\tag{10}",
+    "11": "\\sum_{i,j}\\left(\\log\\frac{p_{ij}}{p_i+p_j}-\\boldsymbol{e}_i^{T}\\boldsymbol{o}_j\\right)^{2}. \\tag{11}",
+    "12": "\\begin{aligned}\n&\\sum_{i,j} f(x_{ij}) \\left( \\log x_{ij} - b_i - s_j - e_i^T o_j \\right)^2 \\\\\n&f(x_{ij}) = \\begin{cases} (x_{ij}/x_{\\max})^{\\alpha} & \\text{if } x_{ij} < x_{\\max} \\\\ 1 & \\text{otherwise} \\end{cases}\n\\end{aligned} \\tag{12}",
+    "13": "\\sum_{i,j} f(x_{ij}) \\left( \\log \\frac{p_{ij}}{p_{i+}p_{+j}} - \\log x_{++} - e_i^{T} o_j \\right)^{2} \\tag{13}",
+    "14": "\\sum_{i,j} g(x_{ij}) \\left( \\log \\frac{p_{ij}}{p_i+p_j} - \\log n - \\mathbf{e}_i^T \\mathbf{o}_j \\right)^2 \\tag{14}",
+    "15": "\\log \\frac{p_{ij}}{p_{i+}+p_{+j}} \\approx \\frac{p_{ij}}{p_{i+}+p_{+j}} - 1 \\tag{15}",
+    "16": "\\sum_{i,j} p_{i+P+j} \\left( \\log \\frac{p_{ij}}{p_{i+P+j}} - e_i^T o_j \\right)^2 . \\tag{16}",
+    "17": "\\sum_{i,j} p_{i+p+j}\\left(\\log \\frac{p_{ij}}{p_i+p+j}-e_i^T o_j\\right)^{2} \\tag{17}"
+  }
+}

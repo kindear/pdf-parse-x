@@ -1,0 +1,45 @@
+{
+  "number": 6,
+  "page": 12,
+  "caption": "Table 6. Numerical Sum median speedup and parallel efficiency at p = 16 for the 400M- and 800M-element inputs.",
+  "headers": [
+    "Language",
+    "400M Speedup",
+    "400M Eff. (%)",
+    "800M Speedup",
+    "800M Eff. (%)"
+  ],
+  "rows": [
+    [
+      "Rust",
+      "10.854",
+      "67.84",
+      "9.723",
+      "60.77"
+    ],
+    [
+      "Julia",
+      "9.661",
+      "60.38",
+      "10.416",
+      "65.10"
+    ],
+    [
+      "Haskell",
+      "7.613",
+      "47.58",
+      "11.020",
+      "68.88"
+    ],
+    [
+      "Python",
+      "10.233",
+      "63.96",
+      "12.722",
+      "79.51"
+    ]
+  ],
+  "confidence": 1,
+  "imageOnly": false,
+  "image": "tables/table-06.png"
+}

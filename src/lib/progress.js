@@ -1,7 +1,7 @@
 /**
  * Shared helpers for reporting conversion progress to a terminal or browser.
  *
- * `convertPdfToMarkdown` emits events shaped like:
+ * `convertPdfToMarkdown` emits four coarse phases:
  *   { total, index, label, status: 'start' | 'progress' | 'done' | 'error',
  *     durationMs, detail, progress: { done, total } }
  */
@@ -21,47 +21,55 @@ export function describeProgress(event) {
   const suffix = [
     event.status === 'error' ? '失败' : '',
     event.detail ?? '',
-    formatDuration(event.durationMs)
+    Number.isFinite(event.durationMs) ? formatDuration(event.durationMs) : ''
   ]
     .filter(Boolean)
-    .join('  ');
-  return `${tag} ${event.label} … ${suffix}`;
+    .join(' · ');
+  return `${tag} ${event.label}${suffix ? ` · ${suffix}` : ''}`;
 }
 
 /**
- * Terminal renderer: keeps the running step on one line and rewrites it with
- * per-item progress when the stream is a TTY.
+ * Terminal renderer that keeps a single line alive: every event rewrites the
+ * previous one, so only the latest progress is visible. `finish()` clears that
+ * line so the caller can print its own final summary in place.
  */
 export function createConsoleProgress({
   write = (chunk) => process.stdout.write(chunk),
   tty = Boolean(process.stdout.isTTY)
 } = {}) {
-  let activeLine = false;
-  let activeHead = '';
+  let active = false;
 
-  return (event) => {
+  const progress = (event) => {
+    const tag = `[${event.index}/${event.total}]`;
+
     if (event.status === 'start') {
-      activeHead = `[${event.index}/${event.total}] ${event.label}`;
-      if (tty) {
-        write(`${activeHead} … `);
-        activeLine = true;
-      }
+      if (!tty) return;
+      write(`\r\x1b[2K${tag} ${event.label} … `);
+      active = true;
       return;
     }
 
     if (event.status === 'progress') {
       if (!tty || !event.progress) return;
-      write(`\r${activeHead} … ${event.progress.done}/${event.progress.total}`);
-      activeLine = true;
+      write(
+        `\r\x1b[2K${tag} ${event.label} … ${event.progress.done}/${event.progress.total}`
+      );
+      active = true;
       return;
     }
 
-    if (tty && activeLine) {
-      write(`\r${describeProgress(event)}\n`);
+    if (tty) {
+      write(`\r\x1b[2K${describeProgress(event)}`);
+      active = true;
     } else {
       write(`${describeProgress(event)}\n`);
     }
-    activeLine = false;
-    activeHead = '';
   };
+
+  progress.finish = () => {
+    if (tty && active) write('\r\x1b[2K');
+    active = false;
+  };
+
+  return progress;
 }

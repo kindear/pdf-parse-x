@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-11-17T11:47:21.190Z",
+  "generatedAt": "2026-11-17T12:16:58.797Z",
   "pages": 22,
   "figures": 6,
   "tables": 8,
   "equations": 9,
   "latexEquations": 9,
-  "llmEquations": 9,
+  "llmEquations": 0,
   "equationImages": 9,
   "tokenCoverage": 99.89,
   "missingTokenCount": 2,
@@ -14,7 +14,7 @@
     "sensitivity20"
   ],
   "pdfCharacters": 68388,
-  "markdownCharacters": 69711,
+  "markdownCharacters": 69684,
   "tableConfidence": [
     {
       "number": 1,

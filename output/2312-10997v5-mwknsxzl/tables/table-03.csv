@@ -1,0 +1,12 @@
+Context,Answer,Noise,Negative,Information,Counterfactual,Faithfulness,Relevance,Relevance,Robustness,Rejection,Integration,Robustness
+Accuracy ✓ ✓,✓,,,,,✓,,,✓,✓,✓,✓
+EM,,,✓,,,,,,,,,
+Recall ✓,,,,,,,,,,,,
+Precision ✓,,✓,,,,,,,,,,
+R-Rate,,,,,,,,,,,,✓
+Cosine Similarity,,,,,,,,✓,,,,
+Hit Rate ✓,,,,,,,,,,,,
+MRR ✓,,,,,,,,,,,,
+NDCG ✓,,,,,,,,,,,,
+BLEU ✓ ✓,✓,,,,,✓,,,,,,
+ROUGE/ROUGE-L ✓ ✓,✓,,,,,✓,,,,,,

@@ -1,0 +1,52 @@
+{
+  "number": 4,
+  "page": 15,
+  "caption": "TABLE IV SUMMARY OF EVALUATION FRAMEWORKS",
+  "headers": [
+    "Evaluation Framework",
+    "Evaluation Targets",
+    "Evaluation Aspects",
+    "Quantitative Metrics"
+  ],
+  "rows": [
+    [
+      "† RGB",
+      "Retrieval Quality Generation Quality",
+      "Noise Robustness Negative Rejection Information Integration",
+      "Accuracy EM Accuracy"
+    ],
+    [
+      "† RECALL",
+      "Generation Quality",
+      "Counterfactual Robustness Counterfactual Robustness",
+      "Accuracy R-Rate (Reappearance Rate)"
+    ],
+    [
+      "‡ RAGAS",
+      "Retrieval Quality Generation Quality",
+      "Context Relevance Faithfulness Answer Relevance",
+      "* * Cosine Similarity"
+    ],
+    [
+      "‡ ARES",
+      "Retrieval Quality Generation Quality",
+      "Context Relevance Faithfulness Answer Relevance",
+      "Accuracy Accuracy Accuracy"
+    ],
+    [
+      "‡ TruLens",
+      "Retrieval Quality Generation Quality",
+      "Context Relevance Faithfulness Answer Relevance",
+      "* * *"
+    ],
+    [
+      "† CRUD",
+      "Retrieval Quality Generation Quality",
+      "Creative Generation Knowledge-intensive QA Error Correction Summarization",
+      "BLEU ROUGE-L BertScore RAGQuestEval"
+    ]
+  ],
+  "confidence": 1,
+  "imageOnly": false,
+  "image": "tables/table-04.png"
+}

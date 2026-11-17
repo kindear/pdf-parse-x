@@ -245,7 +245,7 @@ function renderToc(toc) {
     .join('');
 }
 
-function renderGallery(items, type) {
+function renderGallery(items, type, resolveUrl = (value) => value) {
   if (!items.length) {
     return `<p class="empty-note">没有检测到${type === 'figure' ? '图片' : '表格'}资源。</p>`;
   }
@@ -254,14 +254,15 @@ function renderGallery(items, type) {
     .map((item, index) => {
       const file = item.file ?? item.image;
       if (!file) return '';
+      const href = resolveUrl(file);
       const label =
         type === 'figure'
           ? `Figure ${item.number ?? index + 1}`
           : `Table ${item.number ?? index + 1}`;
       const caption = normalizeInline(item.caption).slice(0, 100);
       return `
-        <a class="gallery-item" href="${escapeHtml(file)}" data-lightbox="true" data-caption="${escapeHtml(caption)}">
-          <span class="gallery-thumb"><img src="${escapeHtml(file)}" alt="${escapeHtml(label)}" loading="lazy"></span>
+        <a class="gallery-item" href="${escapeHtml(href)}" data-lightbox="true" data-caption="${escapeHtml(caption)}">
+          <span class="gallery-thumb"><img src="${escapeHtml(href)}" alt="${escapeHtml(label)}" loading="lazy"></span>
           <span class="gallery-label">${escapeHtml(label)}</span>
         </a>
       `;
@@ -304,6 +305,25 @@ function renderMetaRows(metadata) {
     .join('');
 }
 
+const ABSOLUTE_URL = /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#|\?)/i;
+
+// 预览页挂在 /preview/<id> 下，正文里的相对路径要换成 /output/<id>/… ；
+// 这里不能靠 <base> 实现，否则 #章节锚点 会被解析成 /output/<id>/#节 而跳转失败。
+function resolveAssetUrl(value, base) {
+  const url = String(value ?? '').trim();
+  if (!url || !base || ABSOLUTE_URL.test(url)) return value;
+  return `${base}${url}`;
+}
+
+function absolutizeAssetUrls(html, base) {
+  if (!base) return html;
+  return html.replace(
+    /(\ssrc="|\shref="|\sposter=")([^"]*)(")/g,
+    (match, prefix, value, suffix) =>
+      `${prefix}${resolveAssetUrl(value, base)}${suffix}`
+  );
+}
+
 export function buildPreviewHtml({
   title,
   markdown,
@@ -315,6 +335,8 @@ export function buildPreviewHtml({
   backUrl = ''
 }) {
   const rendered = renderMarkdown(markdown);
+  const resolveUrl = (value) => resolveAssetUrl(value, baseHref);
+  const bodyHtml = absolutizeAssetUrls(rendered.html, baseHref);
   const pageTitle = normalizeInline(title || metadata.title) || 'PDF 转 Markdown';
   const backLink = backUrl
     ? `<a class="topbar-link" href="${escapeHtml(backUrl)}">← 文档列表</a>`
@@ -326,7 +348,6 @@ export function buildPreviewHtml({
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(pageTitle)} · Markdown 预览</title>
-  ${baseHref ? `<base href="${escapeHtml(baseHref)}">` : ''}
   <style>${previewCss}</style>
 </head>
 <body>
@@ -355,19 +376,19 @@ export function buildPreviewHtml({
 
       <section class="sidebar-section">
         <div class="section-title">图片资源 <span>${figures.length}</span></div>
-        <div class="gallery">${renderGallery(figures, 'figure')}</div>
+        <div class="gallery">${renderGallery(figures, 'figure', resolveUrl)}</div>
       </section>
 
       <section class="sidebar-section">
         <div class="section-title">表格资源 <span>${tables.length}</span></div>
-        <div class="gallery">${renderGallery(tables, 'table')}</div>
+        <div class="gallery">${renderGallery(tables, 'table', resolveUrl)}</div>
       </section>
 
       <section class="sidebar-section sidebar-downloads">
         <div class="section-title">下载</div>
-        <a href="main.md" download>Markdown 文件</a>
-        <a href="report.json" download>完整性报告</a>
-        <a href="metadata.json" download>元数据</a>
+        <a href="${escapeHtml(resolveUrl('main.md'))}" download>Markdown 文件</a>
+        <a href="${escapeHtml(resolveUrl('report.json'))}" download>完整性报告</a>
+        <a href="${escapeHtml(resolveUrl('metadata.json'))}" download>元数据</a>
       </section>
     </aside>
 
@@ -376,13 +397,13 @@ export function buildPreviewHtml({
         ${backLink}
         <div class="topbar-actions">
           <button class="topbar-button" type="button" id="toggleSidebar" aria-label="切换侧边栏">目录</button>
-          <a class="topbar-button primary" href="main.md" download>下载 Markdown</a>
+          <a class="topbar-button primary" href="${escapeHtml(resolveUrl('main.md'))}" download>下载 Markdown</a>
           <button class="topbar-button" type="button" id="printButton">打印 / PDF</button>
         </div>
       </header>
 
       <article class="markdown-body" id="markdownBody">
-        ${rendered.html}
+        ${bodyHtml}
       </article>
 
       <footer class="preview-footer">
@@ -416,7 +437,15 @@ export function buildPreviewHtml({
       printButton?.addEventListener('click', () => window.print());
 
       document.querySelectorAll('a.toc-link').forEach((link) => {
-        link.addEventListener('click', () => sidebar?.classList.remove('is-open'));
+        link.addEventListener('click', (event) => {
+          const id = decodeURIComponent((link.getAttribute('href') || '').replace(/^#/, ''));
+          const target = id ? document.getElementById(id) : null;
+          if (!target) return;
+          event.preventDefault();
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          if (location.hash !== '#' + id) history.replaceState(null, '', '#' + id);
+          sidebar?.classList.remove('is-open');
+        });
       });
 
       const openLightbox = (src, alt, caption) => {

@@ -1,0 +1,3 @@
+# Table 8. Standardized component-reduction sensitivity at p = 16 for the larger input of each workload. Entries report the percentage reduction in total parallel-region time under a hypothetical 20% reduction in the indicated component while the remaining measured components are held unchanged.
+
+![Table 8. Standardized component-reduction sensitivity at p = 16 for the larger input of each workload. Entries report the percentage reduction in total parallel-region time under a hypothetical 20% reduction in the indicated component while the remaining measured components are held unchanged.](table-08.png)

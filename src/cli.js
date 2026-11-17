@@ -65,37 +65,34 @@ async function main() {
   );
   console.log('');
 
+  const progress = createConsoleProgress();
   const startedAt = performance.now();
   const result = await convertPdfToMarkdown(inputPath, {
     outputDir,
     previewFile: keepPreview,
-    onProgress: createConsoleProgress()
+    onProgress: progress
   });
   const elapsed = performance.now() - startedAt;
+  progress.finish();
 
-  console.log('');
-  console.log(`转换完成（总耗时 ${formatDuration(elapsed)}）`);
+  const summary = [
+    `${result.report.pages} 页`,
+    `${result.report.figures} 图`,
+    `${result.report.tables} 表`,
+    `${result.report.equations} 公式`,
+    `覆盖 ${result.report.tokenCoverage}%`,
+    `总耗时 ${formatDuration(elapsed)}`
+  ].join(' · ');
+
+  console.log(`✔ 转换完成 · ${summary}`);
   console.log(`  标题: ${result.metadata.title}`);
-  console.log(`  页数: ${result.report.pages}`);
-  console.log(`  图片: ${result.report.figures}`);
-  console.log(`  表格: ${result.report.tables}`);
-  console.log(`  公式: ${result.report.equations}`);
-  if (result.report.equations) {
-    console.log(
-      `  LaTeX: ${result.report.latexEquations}/${result.report.equations}（模型重建 ${result.report.llmEquations}）`
-    );
-  }
-  console.log(`  文本覆盖: ${result.report.tokenCoverage}%`);
-  console.log('');
   console.log(`  Markdown: ${path.join(outputDir, 'main.md')}`);
   console.log(
     keepPreview
-      ? `  预览页:   ${path.join(outputDir, 'preview.html')}`
-      : '  预览:     npm start 后访问 /preview/<文档 ID>（按需从 main.md 渲染）'
+      ? `  预览页: ${path.join(outputDir, 'preview.html')}`
+      : '  预览:   npm start 后访问 /preview/<文档 ID>（按需从 main.md 渲染）'
   );
-  console.log(`  图片目录: ${path.join(outputDir, 'figs')}`);
-  console.log(`  表格目录: ${path.join(outputDir, 'tables')}`);
-  console.log(`  完整性:   ${path.join(outputDir, 'report.json')}`);
+  console.log(`  资源:   ${path.join(outputDir, 'figs')} · ${path.join(outputDir, 'tables')}`);
 
   if (result.report.warnings.length) {
     console.log('');

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "source": "software-05-00038.pdf",
+  "generatedAt": "2026-11-17T12:05:22.087Z",
+  "sources": {
+    "2": "llm",
+    "3": "llm",
+    "4": "llm",
+    "5": "llm",
+    "6": "llm",
+    "7": "llm",
+    "8": "llm",
+    "9": "llm"
+  },
+  "formulas": {
+    "2": "E_p = \\frac{S_p}{p} \\tag{2}",
+    "3": "R_p = \\max(0,\\, T_p - C_p - B_p). \\tag{3}",
+    "4": "c_p = \\frac{\\overline{C}_p}{\\overline{T}_p}, \\qquad b_p = \\frac{\\overline{B}_p}{\\overline{T}_p}, \\qquad r_p = \\frac{\\overline{R}_p}{\\overline{T}_p}, \\tag{4}",
+    "5": "\\mathrm{WRSS}_{w,l,n}(p) = \\left[ c_p, b_p, r_p, S_p \\right]. \\tag{5}",
+    "6": "D_{p}=\\operatorname{argmax}\\{c_{p}, b_{p}, r_{p}\\}. \\tag{6}",
+    "7": "p_{\\mathrm{BT}} = \\min \\{p > 1 : D_p \\neq D_1\\}, \\tag{7}",
+    "8": "T_{p}^{(X,20)}=T_{p}-0.20\\mathrm{X}_{p}. \\tag{8}",
+    "9": "\\mathrm{Sensitivity}_{X,p}^{20\\%}=\\frac{T_p-T_p^{(X,20)}}{T_p}=0.20x_p. \\tag{9}"
+  }
+}

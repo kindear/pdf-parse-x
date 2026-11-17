@@ -52,16 +52,23 @@ npm run convert -- "pdfs/paper.pdf" "output/paper"
 npm run convert -- "pdfs/paper.pdf" "output/paper" --preview
 ```
 
-命令行会逐步打印每个阶段的结果与耗时，例如：
+命令行把整个流程压缩成 4 个阶段，运行时始终只有一行日志在刷新（终端里被原地覆盖，不会刷屏）：
 
 ```text
-[1/9] 版式分析 … 36 页 · 2 图 · 12 表 · 17 公式  653ms
-[4/9] 页面截图 … 23 页（23 页命中）  1.2s
-[8/9] 公式 LaTeX … 模型 16 · 原图 1  2m26s
-[9/9] Markdown 与报告 … 101,306 字符 · 覆盖 94.16%  47ms
-
-转换完成（总耗时 2m28s）
+[1/4] 解析 PDF · 36 页 · 2 图 · 12 表 · 17 公式 · 101,306 字符 · 1.4s
 ```
+
+结束后保留汇总行（含总耗时）与输出位置：
+
+```text
+✔ 转换完成 · 36 页 · 2 图 · 12 表 · 17 公式 · 覆盖 94.16% · 总耗时 2m28s
+  标题: ...
+  Markdown: output/paper/main.md
+  预览:   npm start 后访问 /preview/<文档 ID>（按需从 main.md 渲染）
+  资源:   output/paper/figs · output/paper/tables
+```
+
+> 输出被重定向到文件或管道时（如 `> log.txt`、`| tee`），每个阶段各占一行，便于事后排查。
 
 输出目录可以省略，默认使用 `output/<pdf 文件名>`。`src/cli.js` 与 `src/server.js` 会通过 `dotenv` 自动读取项目根目录的 `.env`。
 
@@ -79,7 +86,7 @@ npm run convert -- "pdfs/paper.pdf" "output/paper" --preview
 - **行内公式**：PDF 文本层里小于正文号的数学片段（如 `p` + 下标 `ij`）会按字号与基线偏移重建为行内 `$p_{ij}$`；纯脚注数字不会被误判。
 - **全文预览**：`/preview/<id>` 在请求时把 `main.md` 渲染成 HTML（目录、图片/表格画廊、图片灯箱、打印/PDF 按钮），改完 md 刷新即生效，不再落盘重复的 HTML 文件。
 - **完整性报告**：`report.json` 记录文本 token 覆盖率、公式/表格数量和重建置信度。
-- **分步进度**：命令行与网页都展示 9 个阶段的名称、结果摘要和耗时（版式分析 → 文本 → 内嵌图片 → 页面截图 → 图片资源 → 表格资源 → 公式截图 → 公式 LaTeX → Markdown 与报告）；公式模型阶段还会实时显示“已处理/总数”，最后给出总耗时。
+- **进度日志**：整个流程只分 4 个阶段（解析 PDF → 提取资源 → 公式 LaTeX → 生成 Markdown），命令行与网页都只显示最新的一条日志，字段为 `[阶段/总数] 名称 · 结果摘要 · 耗时`；公式模型阶段会显示“已处理/总数”。结束后保留最后一行与汇总（含总耗时）。
 
 ## 示例结果
 
@@ -257,7 +264,7 @@ src/
 │   ├── formula-llm.js      # 可选 OpenAI 兼容公式模型（含 Mimo Flash）
 │   ├── figure-llm.js       # 可选：图片定位（FIGURE_LLM_ENABLED）
 │   ├── preview.js          # Markdown → HTML 渲染（服务端按需调用）
-│   ├── progress.js         # 分步进度事件格式化（CLI 与 SSE 共用）
+│   ├── progress.js         # 单行进度日志格式化（CLI 原地刷新，SSE 共用）
 │   ├── report.js           # 文本覆盖率与完整性报告
 │   └── text-utils.js       # 文本拼接、断词、行内公式、表格工具
 └── web/

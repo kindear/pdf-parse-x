@@ -7,7 +7,6 @@ const progressWrap = document.getElementById('progressWrap');
 const progressBar = document.getElementById('progressBar');
 const progressPercent = document.getElementById('progressPercent');
 const progressLabel = document.getElementById('progressLabel');
-const progressSteps = document.getElementById('progressSteps');
 const statusBox = document.getElementById('statusBox');
 
 let busy = false;
@@ -56,11 +55,8 @@ function setBusy(value, label = '正在处理…') {
     progressLabel.textContent = label;
     progressBar.style.width = '0%';
     progressPercent.textContent = '0%';
-  } else {
-    setTimeout(() => {
-      progressWrap.hidden = true;
-    }, 500);
   }
+  // 任务结束后保留最后一次日志行与进度条，方便回看耗时；下次转换开始时再重置。
 }
 
 function setProgress(percent) {
@@ -78,45 +74,23 @@ function formatDuration(ms) {
   return `${minutes}m${String(seconds).padStart(2, '0')}s`;
 }
 
-function resetProgressSteps() {
-  progressSteps.innerHTML = '';
-  progressSteps.hidden = true;
-}
-
-function renderProgressStep(event) {
-  progressSteps.hidden = false;
-  let item = progressSteps.querySelector(`li[data-step="${event.index}"]`);
-  if (!item) {
-    item = document.createElement('li');
-    item.dataset.step = String(event.index);
-    item.innerHTML =
-      '<span class="progress-step-label"></span><span class="progress-step-meta"></span>';
-    progressSteps.appendChild(item);
+function progressLine(event) {
+  const tag = `[${event.index}/${event.total}]`;
+  if (event.status === 'start') return `${tag} ${event.label}…`;
+  if (event.status === 'progress') {
+    return `${tag} ${event.label} ${event.progress?.done ?? 0}/${event.progress?.total ?? 0}`;
   }
-
-  item.querySelector('.progress-step-label').textContent =
-    `${event.index}/${event.total} ${event.label}`;
-  const meta = item.querySelector('.progress-step-meta');
-
-  if (event.status === 'start') {
-    item.className = 'is-running';
-    meta.textContent = '进行中…';
-  } else if (event.status === 'progress') {
-    item.className = 'is-running';
-    meta.textContent = `${event.progress?.done ?? 0}/${event.progress?.total ?? 0}`;
-  } else {
-    item.className = event.status === 'error' ? 'is-error' : 'is-done';
-    meta.textContent = [event.detail, formatDuration(event.durationMs)]
-      .filter(Boolean)
-      .join(' · ');
-    setProgress((event.index / (event.total || 1)) * 100);
-  }
-
-  progressSteps.scrollTop = progressSteps.scrollHeight;
+  const detail = [
+    event.status === 'error' ? '失败' : '',
+    event.detail,
+    Number.isFinite(event.durationMs) ? formatDuration(event.durationMs) : ''
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return `${tag} ${event.label}${detail ? ` · ${detail}` : ''}`;
 }
 
 function beginProgressStream(label) {
-  resetProgressSteps();
   progressLabel.textContent = label;
   endProgressStream();
 
@@ -126,9 +100,14 @@ function beginProgressStream(label) {
   const stream = new EventSource(`/api/progress/${id}`);
   stream.addEventListener('progress', (event) => {
     try {
-      renderProgressStep(JSON.parse(event.data));
+      const payload = JSON.parse(event.data);
+      // Only the newest line stays visible: each event overwrites the label.
+      progressLabel.textContent = progressLine(payload);
+      if (payload.status === 'done' || payload.status === 'error') {
+        setProgress((payload.index / (payload.total || 1)) * 100);
+      }
     } catch {
-      // Malformed frame: ignore and keep the previous state.
+      // Malformed frame: keep the previous label.
     }
   });
   stream.addEventListener('done', () => {
@@ -143,6 +122,20 @@ function endProgressStream() {
   if (!progressStream) return;
   progressStream.close();
   progressStream = null;
+}
+
+function summaryLine(report, elapsedMs) {
+  const parts = report
+    ? [
+        `${report.pages} 页`,
+        `${report.figures} 图`,
+        `${report.tables} 表`,
+        `${report.equations} 公式`,
+        `覆盖 ${report.tokenCoverage}%`
+      ]
+    : [];
+  parts.push(`总耗时 ${formatDuration(elapsedMs)}`);
+  return parts.join(' · ');
 }
 
 function documentCard(document) {
@@ -212,6 +205,7 @@ function uploadFile(file) {
 
   clearStatus();
   setBusy(true, '正在解析 PDF…');
+  const startedAt = performance.now();
   const progressId = beginProgressStream('正在上传…');
 
   const formData = new FormData();
@@ -243,7 +237,8 @@ function uploadFile(file) {
       setProgress(100);
       showStatus(
         'success',
-        `转换完成：<strong>${escapeHtml(payload.title || file.name)}</strong>。
+        `转换完成：<strong>${escapeHtml(payload.title || file.name)}</strong><br>
+         ${escapeHtml(summaryLine(payload.report, performance.now() - startedAt))}<br>
          <a href="${escapeHtml(payload.previewUrl)}">打开 Markdown 预览 →</a>`
       );
       await loadDocuments();
@@ -292,6 +287,7 @@ sampleButton.addEventListener('click', async () => {
   clearStatus();
   setBusy(true, '正在解析示例 PDF…');
   progressWrap.hidden = false;
+  const startedAt = performance.now();
   const progressId = beginProgressStream('正在解析示例 PDF…');
 
   try {
@@ -305,7 +301,8 @@ sampleButton.addEventListener('click', async () => {
     setProgress(100);
     showStatus(
       'success',
-      `示例转换完成：<strong>${escapeHtml(payload.title || '示例文档')}</strong>。
+      `示例转换完成：<strong>${escapeHtml(payload.title || '示例文档')}</strong><br>
+       ${escapeHtml(summaryLine(payload.report, performance.now() - startedAt))}<br>
        <a href="${escapeHtml(payload.previewUrl)}">打开 Markdown 预览 →</a>`
     );
     await loadDocuments();

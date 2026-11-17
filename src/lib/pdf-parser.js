@@ -579,7 +579,7 @@ export async function convertPdfToMarkdown(input, options = {}) {
   await mkdir(path.join(outputDir, 'tables'), { recursive: true });
 
   const warnings = [];
-  const totalSteps = 9;
+  const totalSteps = 4;
   const emit = (payload) => {
     if (typeof options.onProgress !== 'function') return;
     try {
@@ -614,48 +614,34 @@ export async function convertPdfToMarkdown(input, options = {}) {
   };
 
   const pdfData = new Uint8Array(buffer);
-  const layout = await step(
-    1,
-    '版式分析',
-    () => extractLayout(pdfData),
-    (result) => {
-      const figureCount = result.pages.reduce((n, page) => n + page.figures.length, 0);
-      const tableCount = result.pages.reduce((n, page) => n + page.tables.length, 0);
-      const equationCount = result.pages.reduce(
-        (n, page) => n + (page.equations?.length ?? 0),
-        0
-      );
-      return `${result.totalPages} 页 · ${figureCount} 图 · ${tableCount} 表 · ${equationCount} 公式`;
-    }
-  );
   const parser = new PDFParse({ data: buffer });
 
   try {
-    const textData = await step(
-      2,
-      '文本与元数据',
+    const parsed = await step(
+      1,
+      '解析 PDF',
       async () => {
+        const layout = await extractLayout(pdfData);
         const info = await parser.getInfo({ parsePageInfo: false });
         const textResult = await parser.getText({ pageJoiner: '' });
-        return { info, textResult };
-      },
-      ({ textResult }) =>
-        `${textResult.pages.length} 页文本 · ${textResult.text.length.toLocaleString('en-US')} 字符`
-    );
-    const info = textData.info;
-    const textResult = textData.textResult;
-    const imageResult = await step(
-      3,
-      '内嵌图片',
-      () =>
-        parser.getImage({
+        const imageResult = await parser.getImage({
           imageThreshold: 0,
           imageDataUrl: false,
           imageBuffer: true
-        }),
-      (result) =>
-        `${result.pages.reduce((n, page) => n + page.images.length, 0)} 张内嵌位图`
+        });
+        return { layout, info, textResult, imageResult };
+      },
+      ({ layout, textResult }) => {
+        const figureCount = layout.pages.reduce((n, page) => n + page.figures.length, 0);
+        const tableCount = layout.pages.reduce((n, page) => n + page.tables.length, 0);
+        const equationCount = layout.pages.reduce(
+          (n, page) => n + (page.equations?.length ?? 0),
+          0
+        );
+        return `${layout.totalPages} 页 · ${figureCount} 图 · ${tableCount} 表 · ${equationCount} 公式 · ${textResult.text.length.toLocaleString('en-US')} 字符`;
+      }
     );
+    const { layout, info, textResult, imageResult } = parsed;
 
     const figures = layout.pages.flatMap((page) =>
       page.figures.map((figure) => ({
@@ -704,41 +690,32 @@ export async function convertPdfToMarkdown(input, options = {}) {
     for (const figure of figures) screenshotsNeeded.add(figure.pageNumber);
 
     let screenshots = [];
-    await step(
-      4,
-      '页面截图',
-      async () => {
-        if (!screenshotsNeeded.size) return;
-        try {
-          const screenshotResult = await parser.getScreenshot({
-            partial: [...screenshotsNeeded].sort((a, b) => a - b),
-            scale: 2,
-            imageDataUrl: false,
-            imageBuffer: true
-          });
-          screenshots = screenshotResult.pages;
-        } catch (error) {
-          warnings.push(`页面截图生成失败：${error.message}`);
-        }
-      },
-      () =>
-        screenshots.length
-          ? `${screenshots.length} 页（${[...screenshotsNeeded].length} 页命中）`
-          : '无需截图'
-    );
-
-    const figuresByPage = new Map();
-    for (const figure of figures) {
-      const list = figuresByPage.get(figure.pageNumber) ?? [];
-      list.push(figure);
-      figuresByPage.set(figure.pageNumber, list);
-    }
-
     let figureCounter = 0;
     await step(
-      5,
-      '图片资源',
+      2,
+      '提取资源',
       async () => {
+        if (screenshotsNeeded.size) {
+          try {
+            const screenshotResult = await parser.getScreenshot({
+              partial: [...screenshotsNeeded].sort((a, b) => a - b),
+              scale: 2,
+              imageDataUrl: false,
+              imageBuffer: true
+            });
+            screenshots = screenshotResult.pages;
+          } catch (error) {
+            warnings.push(`页面截图生成失败：${error.message}`);
+          }
+        }
+
+        const figuresByPage = new Map();
+        for (const figure of figures) {
+          const list = figuresByPage.get(figure.pageNumber) ?? [];
+          list.push(figure);
+          figuresByPage.set(figure.pageNumber, list);
+        }
+
         for (const page of layout.pages) {
           const pageFigures = (figuresByPage.get(page.pageNumber) ?? []).sort(
             (a, b) => b.captionY - a.captionY
@@ -767,41 +744,31 @@ export async function convertPdfToMarkdown(input, options = {}) {
             });
           }
         }
-      },
-      () => `${figureCounter} 张图片${figures.some((f) => f.fallback) ? '（含回退裁剪）' : ''}`
-    );
 
-    await step(
-      6,
-      '表格资源',
-      async () => {
         for (const table of tables) {
           const page = layout.pages.find((candidate) => candidate.pageNumber === table.pageNumber);
           const screenshot = screenshotForPage(screenshots, table.pageNumber);
           await saveTableImage({ table, screenshot, page, outputDir });
           await writeTableFiles({ table, outputDir });
         }
-      },
-      () => `${tables.length} 张表格（Markdown / CSV / JSON / 截图）`
-    );
 
-    await step(
-      7,
-      '公式截图',
-      () =>
-        saveEquationImages({
+        await saveEquationImages({
           equations,
           screenshots,
           layout,
           outputDir,
           warnings
-        }),
-      () => `${equations.length} 个公式区域`
+        });
+      },
+      () =>
+        `${figureCounter} 图 · ${tables.length} 表 · ${equations.length} 公式${
+          screenshots.length ? ` · ${screenshots.length} 页截图` : ''
+        }`
     );
 
     const formulaLlm = getFormulaLlmConfig(options.formulaLlm ?? {});
     await step(
-      8,
+      3,
       '公式 LaTeX',
       async () => {
         if (!formulaLlm.enabled) return;
@@ -866,7 +833,7 @@ export async function convertPdfToMarkdown(input, options = {}) {
             }
             completed += 1;
             emit({
-              index: 8,
+              index: 3,
               label: '公式 LaTeX',
               status: 'progress',
               progress: { done: completed, total: budget.length }
@@ -984,8 +951,8 @@ export async function convertPdfToMarkdown(input, options = {}) {
     let mainPath = null;
 
     await step(
-      9,
-      'Markdown 与报告',
+      4,
+      '生成 Markdown',
       async () => {
         metadata = normalizeMetadata(info, sourceFile);
         markdownResult = buildMarkdown({

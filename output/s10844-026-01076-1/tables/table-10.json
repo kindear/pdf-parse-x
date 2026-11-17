@@ -1,0 +1,94 @@
+{
+  "number": 10,
+  "page": 28,
+  "caption": "Table 10 Correlation coefficient ρ for BERT WordSim353",
+  "headers": [
+    "Column 1",
+    "Column 2"
+  ],
+  "rows": [
+    [
+      "BERT-PRETRAIN-LSAT-LAYER",
+      "0.303"
+    ],
+    [
+      "BERT-PRETRAIN-FIRST-LAYER",
+      "0.700"
+    ],
+    [
+      "BERT-FINETUNE-LSAT-LAYER",
+      "0.373"
+    ],
+    [
+      "BERT-FINETUNE-FIRST-LAYER",
+      "0.695"
+    ],
+    [
+      "BERT-PRETRAIN-LSAT-LAYER",
+      "0.176"
+    ],
+    [
+      "BERT-PRETRAIN-FIRST-LAYER",
+      "0.364"
+    ],
+    [
+      "BERT-FINETUNE-LSAT-LAYER",
+      "0.210"
+    ],
+    [
+      "BERT-FINETUNE-FIRST-LAYER",
+      "0.365"
+    ],
+    [
+      "BERT-PRETRAIN-LSAT-LAYER",
+      "0.280"
+    ],
+    [
+      "BERT-PRETRAIN-FIRST-LAYER",
+      "0.642"
+    ],
+    [
+      "BERT-FINETUNE-LSAT-LAYER",
+      "0.348"
+    ],
+    [
+      "BERT-FINETUNE-FIRST-LAYER",
+      "0.623"
+    ],
+    [
+      "BERT-PRETRAIN-LSAT-LAYER",
+      "0.174"
+    ],
+    [
+      "BERT-PRETRAIN-FIRST-LAYER",
+      "0.486"
+    ],
+    [
+      "BERT-FINETUNE-LSAT-LAYER",
+      "0.240"
+    ],
+    [
+      "BERT-FINETUNE-FIRST-LAYER",
+      "0.492"
+    ],
+    [
+      "BERT-PRETRAIN-LSAT-LAYER",
+      "0.933"
+    ],
+    [
+      "BERT-PRETRAIN-FIRST-LAYER",
+      "2.191"
+    ],
+    [
+      "BERT-FINETUNE-LSAT-LAYER",
+      "1.171"
+    ],
+    [
+      "BERT-FINETUNE-FIRST-LAYER",
+      "2.176"
+    ]
+  ],
+  "confidence": 1,
+  "imageOnly": true,
+  "image": "tables/table-10.png"
+}

@@ -1,0 +1,50 @@
+{
+  "generatedAt": "2026-11-17T12:19:12.328Z",
+  "pages": 21,
+  "figures": 6,
+  "tables": 4,
+  "equations": 0,
+  "latexEquations": 0,
+  "llmEquations": 0,
+  "equationImages": 0,
+  "tokenCoverage": 99.79,
+  "missingTokenCount": 7,
+  "missingTokenSamples": [
+    "fig",
+    "msmarco",
+    "law",
+    "prize",
+    "inadvertent",
+    "12https",
+    "smalltobig"
+  ],
+  "pdfCharacters": 110035,
+  "markdownCharacters": 107327,
+  "tableConfidence": [
+    {
+      "number": 1,
+      "page": 6,
+      "confidence": 0,
+      "fallback": true
+    },
+    {
+      "number": 2,
+      "page": 13,
+      "confidence": 0,
+      "fallback": true
+    },
+    {
+      "number": 3,
+      "page": 14,
+      "confidence": 0.175,
+      "fallback": false
+    },
+    {
+      "number": 4,
+      "page": 15,
+      "confidence": 1,
+      "fallback": false
+    }
+  ],
+  "warnings": []
+}

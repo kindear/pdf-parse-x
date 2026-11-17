@@ -484,6 +484,8 @@ export function isLikelyHeading(text, options = {}) {
     if (numbering.split('.').length > 4) return false;
     if (Number(numbering.split('.')[0]) > 99) return false;
     if (title.length > 110) return false;
+    // 章节标题总以大写（或括号/数字）开头；小写开头的一律视为正文续行。
+    if (/^[a-z\u00e0-\u00ff]/.test(title)) return false;
     if (/[.;:,]$/.test(title)) return false;
     if (/^\d/.test(title)) return false;
     if (/\b(?:is|are|was|were|has|have|can|may|should|would|will)\b/i.test(title)) {
