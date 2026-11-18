@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import katex from 'katex';
+import { decodeHtmlEntities } from './text-utils.js';
 
 /**
  * Formula LaTeX is intentionally not hard-coded per paper.
@@ -17,7 +18,7 @@ import katex from 'katex';
  * paper. If no override is available, the original PDF equation crop is kept.
  */
 export function normalizeLatexResponse(value) {
-  let latex = String(value ?? '').trim();
+  let latex = decodeHtmlEntities(String(value ?? '')).trim();
   if (!latex) return '';
 
   latex = latex
@@ -83,9 +84,10 @@ export function finalizeLatex(body, number) {
   const wrapped = wrapMultilineLatex(normalizeLatexResponse(body));
   if (!wrapped) return null;
 
-  const latex = /\\tag\{/.test(wrapped)
-    ? wrapped
-    : `${wrapped} \\tag{${number}}`;
+  // Unnumbered display equations get no \tag so they render centered only.
+  const hasNumber = number !== null && number !== undefined && number !== '';
+  const latex =
+    /\\tag\{/.test(wrapped) || !hasNumber ? wrapped : `${wrapped} \\tag{${number}}`;
 
   return validateLatex(latex) ? latex : null;
 }
@@ -184,13 +186,15 @@ export async function loadFormulaOverrides({
 export function resolveFormulaLatex(equation, overrides = {}) {
   if (!equation) return null;
 
+  const key = equation.key ?? equation.number;
   const raw =
     equation.customLatex ??
-    overrides[equation.number] ??
-    overrides[String(equation.number)] ??
+    overrides[key] ??
+    (equation.number !== undefined ? overrides[equation.number] : undefined) ??
+    (equation.number !== undefined ? overrides[String(equation.number)] : undefined) ??
     null;
   if (!raw) return null;
 
-  return finalizeLatex(raw, equation.number);
+  return finalizeLatex(raw, equation.number ?? null);
 }
 

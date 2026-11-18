@@ -4,12 +4,13 @@ import { access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { convertPdfToMarkdown } from './lib/pdf-parser.js';
 import { getFormulaLlmConfig } from './lib/formula-llm.js';
+import { getTranslateConfig } from './lib/translate.js';
 import { createConsoleProgress, formatDuration } from './lib/progress.js';
 import { safeOutputName } from './lib/text-utils.js';
 
 function usage() {
   console.log(`用法:
-  npm run convert -- <input.pdf> [output-dir] [--preview]
+  npm run convert -- <input.pdf> [output-dir] [--preview] [--zh|--no-zh]
 
 示例:
   npm run convert -- paper.pdf output/paper
@@ -19,16 +20,26 @@ function usage() {
 说明:
   默认不生成 preview.html，网页预览由 npm start 启动的服务从 main.md 实时渲染。
   --preview（或 PERSIST_PREVIEW=true）会额外写出可双击打开的静态预览文件。
+  --zh / --no-zh 强制开关中文翻译（默认由 TRANSLATE_ENABLED 决定），
+  启用后输出目录会多出 main_zh.md。
 
 可选环境变量（写在 .env）:
   LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
-  未配置时公式回退为 PDF 原图。`);
+  TRANSLATE_ENABLED=true 启用中文翻译
+  未配置模型时公式回退为 PDF 原图，也不会生成中文版。`);
 }
 
 async function main() {
   const args = process.argv.slice(2);
   const keepPreview = args.includes('--preview');
-  const [inputArg, outputArg] = args.filter((arg) => arg !== '--preview');
+  const translateFlag = args.includes('--zh')
+    ? true
+    : args.includes('--no-zh')
+      ? false
+      : undefined;
+  const [inputArg, outputArg] = args.filter(
+    (arg) => !['--preview', '--zh', '--no-zh'].includes(arg)
+  );
 
   if (!inputArg || inputArg === '--help' || inputArg === '-h') {
     usage();
@@ -63,6 +74,10 @@ async function main() {
         : '未启用（公式回退为 PDF 原图）'
     }`
   );
+  const translateConfig = getTranslateConfig(
+    translateFlag === undefined ? {} : { enabled: translateFlag }
+  );
+  console.log(`中文翻译: ${translateConfig.enabled ? '启用' : '未启用'}`);
   console.log('');
 
   const progress = createConsoleProgress();
@@ -70,6 +85,8 @@ async function main() {
   const result = await convertPdfToMarkdown(inputPath, {
     outputDir,
     previewFile: keepPreview,
+    translate:
+      translateFlag === undefined ? undefined : { enabled: translateFlag },
     onProgress: progress
   });
   const elapsed = performance.now() - startedAt;
@@ -87,6 +104,9 @@ async function main() {
   console.log(`✔ 转换完成 · ${summary}`);
   console.log(`  标题: ${result.metadata.title}`);
   console.log(`  Markdown: ${path.join(outputDir, 'main.md')}`);
+  if (result.mainZhPath) {
+    console.log(`  中文版: ${result.mainZhPath}`);
+  }
   console.log(
     keepPreview
       ? `  预览页: ${path.join(outputDir, 'preview.html')}`

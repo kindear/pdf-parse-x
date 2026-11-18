@@ -8,6 +8,7 @@ import multer from 'multer';
 import { convertPdfToMarkdown } from './lib/pdf-parser.js';
 import { buildPreviewHtml, collectResources } from './lib/preview.js';
 import { createConsoleProgress } from './lib/progress.js';
+import { getTranslateConfig, translateOutputDir } from './lib/translate.js';
 import { safeOutputName } from './lib/text-utils.js';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -143,6 +144,11 @@ function progressHandler(progressId, logStep = createConsoleProgress()) {
   };
 }
 
+/** Translation is opt-in: only an explicit `translate=true` starts it. */
+function wantsTranslate(value) {
+  return value === true || value === 'true' || value === '1' || value === 1;
+}
+
 async function listDocuments() {
   const entries = await readdir(outputRoot, { withFileTypes: true });
   const documents = [];
@@ -165,6 +171,10 @@ async function listDocuments() {
       }
     }
 
+    const hasChinese = await stat(path.join(directory, 'main_zh.md'))
+      .then(() => true)
+      .catch(() => false);
+
     documents.push({
       id: entry.name,
       title: metadata?.title ?? report?.title ?? entry.name,
@@ -174,8 +184,12 @@ async function listDocuments() {
       tables: report?.tables ?? 0,
       equations: report?.equations ?? 0,
       coverage: report?.tokenCoverage ?? null,
+      hasChinese,
       generatedAt,
       previewUrl: `/preview/${encodeURIComponent(entry.name)}`,
+      chinesePreviewUrl: hasChinese
+        ? `/preview/${encodeURIComponent(entry.name)}?lang=zh`
+        : null,
       markdownUrl: `/output/${encodeURIComponent(entry.name)}/main.md`,
       reportUrl: `/output/${encodeURIComponent(entry.name)}/report.json`
     });
@@ -228,12 +242,14 @@ app.post('/api/convert', upload.single('pdf'), async (request, response, next) =
     const progressId = validProgressId(request.body?.progressId)
       ? request.body.progressId
       : null;
+    const wantsTranslation = wantsTranslate(request.body?.translate);
 
     let result;
     try {
       result = await convertPdfToMarkdown(request.file.buffer, {
         sourceName: request.file.originalname,
         outputDir,
+        translate: wantsTranslation ? { enabled: true } : undefined,
         onProgress: progressHandler(progressId)
       });
     } catch (error) {
@@ -245,7 +261,11 @@ app.post('/api/convert', upload.single('pdf'), async (request, response, next) =
     response.json({
       id: jobId,
       title: result.metadata.title,
+      hasChinese: Boolean(result.mainZhPath),
       previewUrl: `/preview/${encodeURIComponent(jobId)}`,
+      chinesePreviewUrl: result.mainZhPath
+        ? `/preview/${encodeURIComponent(jobId)}?lang=zh`
+        : null,
       markdownUrl: `/output/${encodeURIComponent(jobId)}/main.md`,
       reportUrl: `/output/${encodeURIComponent(jobId)}/report.json`,
       report: result.report
@@ -269,11 +289,13 @@ app.post('/api/convert-sample', async (request, response, next) => {
     const progressId = validProgressId(request.body?.progressId)
       ? request.body.progressId
       : null;
+    const wantsTranslation = wantsTranslate(request.body?.translate);
 
     let result;
     try {
       result = await convertPdfToMarkdown(samplePdf, {
         outputDir,
+        translate: wantsTranslation ? { enabled: true } : undefined,
         onProgress: progressHandler(progressId)
       });
     } catch (error) {
@@ -285,10 +307,74 @@ app.post('/api/convert-sample', async (request, response, next) => {
     response.json({
       id: jobId,
       title: result.metadata.title,
+      hasChinese: Boolean(result.mainZhPath),
       previewUrl: `/preview/${encodeURIComponent(jobId)}`,
+      chinesePreviewUrl: result.mainZhPath
+        ? `/preview/${encodeURIComponent(jobId)}?lang=zh`
+        : null,
       markdownUrl: `/output/${encodeURIComponent(jobId)}/main.md`,
       reportUrl: `/output/${encodeURIComponent(jobId)}/report.json`,
       report: result.report
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/documents/:id/translate', async (request, response, next) => {
+  try {
+    const directory = jobDir(request.params.id);
+    if (!directory) {
+      response.status(400).json({ error: '无效的文档 ID。' });
+      return;
+    }
+
+    const config = getTranslateConfig({ enabled: true });
+    if (!config.enabled || !config.baseUrl) {
+      response.status(400).json({
+        error: '模型未配置，无法生成中文版（请设置 LLM_BASE_URL / LLM_API_KEY）。'
+      });
+      return;
+    }
+
+    const progressId = validProgressId(request.body?.progressId)
+      ? request.body.progressId
+      : null;
+    const logStep = createConsoleProgress();
+    const startedAt = Date.now();
+    const emit = (status, extra = {}) => {
+      const event = { index: 1, total: 1, label: '生成中文版', status, ...extra };
+      logStep(event);
+      if (progressId) broadcastProgress(progressId, event);
+    };
+
+    emit('start');
+    const result = await translateOutputDir({
+      directory,
+      config,
+      onProgress: ({ done, total }) => emit('progress', { progress: { done, total } })
+    });
+
+    if (!result.ok) {
+      emit('error', { durationMs: Date.now() - startedAt, detail: result.error });
+      finishProgress(progressId, { ok: false, error: result.error });
+      response.status(400).json({ error: result.error });
+      return;
+    }
+
+    emit('done', {
+      durationMs: Date.now() - startedAt,
+      detail: `${result.translated}/${result.total} 段 · ${result.markdown.length.toLocaleString('en-US')} 字符`
+    });
+    finishProgress(progressId, { ok: true, id: request.params.id });
+
+    response.json({
+      ok: true,
+      id: request.params.id,
+      translated: result.translated,
+      total: result.total,
+      failed: result.failed,
+      chinesePreviewUrl: `/preview/${encodeURIComponent(request.params.id)}?lang=zh`
     });
   } catch (error) {
     next(error);
@@ -318,29 +404,42 @@ app.get('/preview/:id', async (request, response, next) => {
     }
 
     const directory = jobDir(id);
-    const markdown = await readFile(path.join(directory, 'main.md'), 'utf8').catch(
-      () => null
-    );
-    if (markdown === null) {
+    const [markdown, chineseMarkdown] = await Promise.all([
+      readFile(path.join(directory, 'main.md'), 'utf8').catch(() => null),
+      readFile(path.join(directory, 'main_zh.md'), 'utf8').catch(() => null)
+    ]);
+    if (markdown === null && chineseMarkdown === null) {
       response.status(404).send('文档不存在。');
       return;
     }
+
+    const lang = request.query.lang === 'zh' && chineseMarkdown ? 'zh' : 'en';
+    const activeMarkdown = lang === 'zh' ? chineseMarkdown : markdown ?? chineseMarkdown;
 
     const [metadata, report] = await Promise.all([
       readJson(path.join(directory, 'metadata.json')),
       readJson(path.join(directory, 'report.json'))
     ]);
-    const { figures, tables } = collectResources(markdown);
+    const { figures, tables } = collectResources(activeMarkdown);
+    const previewPath = `/preview/${encodeURIComponent(id)}`;
+    const languages = [
+      { code: 'en', label: 'English', href: previewPath },
+      ...(chineseMarkdown
+        ? [{ code: 'zh', label: '中文', href: `${previewPath}?lang=zh` }]
+        : [])
+    ];
 
     // Rendered on every request, so edits to main.md show up immediately and
     // no duplicate preview.html has to be stored next to the document.
     const html = buildPreviewHtml({
       title: metadata?.title,
-      markdown,
+      markdown: activeMarkdown,
       metadata: metadata ?? {},
       report: report ?? {},
       figures,
       tables,
+      lang,
+      languages,
       baseHref: `/output/${encodeURIComponent(id)}/`,
       backUrl: '/'
     });

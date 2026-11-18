@@ -332,7 +332,9 @@ export function buildPreviewHtml({
   figures = [],
   tables = [],
   baseHref = '',
-  backUrl = ''
+  backUrl = '',
+  lang = 'en',
+  languages = []
 }) {
   const rendered = renderMarkdown(markdown);
   const resolveUrl = (value) => resolveAssetUrl(value, baseHref);
@@ -342,8 +344,19 @@ export function buildPreviewHtml({
     ? `<a class="topbar-link" href="${escapeHtml(backUrl)}">← 文档列表</a>`
     : '<span class="topbar-brand">pdf-parse-x</span>';
 
+  const langSwitch =
+    languages.length > 1
+      ? `<div class="lang-switch">${languages
+          .map(
+            (entry) =>
+              `<a class="lang-option${entry.code === lang ? ' is-active' : ''}" href="${escapeHtml(entry.href)}"${entry.code === lang ? ' aria-current="true"' : ''}>${escapeHtml(entry.label)}</a>`
+          )
+          .join('')}</div>`
+      : '';
+  const hasChinese = languages.some((entry) => entry.code === 'zh');
+
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="${lang === 'zh' ? 'zh-CN' : 'zh-CN'}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -387,6 +400,7 @@ export function buildPreviewHtml({
       <section class="sidebar-section sidebar-downloads">
         <div class="section-title">下载</div>
         <a href="${escapeHtml(resolveUrl('main.md'))}" download>Markdown 文件</a>
+        ${hasChinese ? `<a href="${escapeHtml(resolveUrl('main_zh.md'))}" download>中文 Markdown</a>` : ''}
         <a href="${escapeHtml(resolveUrl('report.json'))}" download>完整性报告</a>
         <a href="${escapeHtml(resolveUrl('metadata.json'))}" download>元数据</a>
       </section>
@@ -396,6 +410,7 @@ export function buildPreviewHtml({
       <header class="topbar">
         ${backLink}
         <div class="topbar-actions">
+          ${langSwitch}
           <button class="topbar-button" type="button" id="toggleSidebar" aria-label="切换侧边栏">目录</button>
           <a class="topbar-button primary" href="${escapeHtml(resolveUrl('main.md'))}" download>下载 Markdown</a>
           <button class="topbar-button" type="button" id="printButton">打印 / PDF</button>
@@ -462,19 +477,35 @@ export function buildPreviewHtml({
         lightboxImage.removeAttribute('src');
       };
 
+      const IMAGE_URL = /\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#].*)?$/i;
+
       document.addEventListener('click', (event) => {
         const link = event.target.closest('[data-lightbox="true"]');
-        if (!link) return;
+        if (link) {
+          event.preventDefault();
+          openLightbox(
+            link.getAttribute('href'),
+            link.querySelector('img')?.alt,
+            link.getAttribute('data-caption')
+          );
+          return;
+        }
+
+        // In-body links such as 「查看表格原图」 open the same viewer instead of
+        // navigating away from the document.
+        const imageLink = event.target.closest('.markdown-body a[href]');
+        if (!imageLink) return;
+        const href = imageLink.getAttribute('href') || '';
+        if (!IMAGE_URL.test(href)) return;
         event.preventDefault();
-        openLightbox(
-          link.getAttribute('href'),
-          link.querySelector('img')?.alt,
-          link.getAttribute('data-caption')
-        );
+        const label = imageLink.textContent.trim();
+        openLightbox(href, label, label);
       });
 
       document.querySelectorAll('.markdown-body img').forEach((image) => {
-        image.addEventListener('click', () => {
+        image.style.cursor = 'zoom-in';
+        image.addEventListener('click', (event) => {
+          event.preventDefault();
           openLightbox(image.getAttribute('src'), image.getAttribute('alt'), image.getAttribute('alt'));
         });
       });

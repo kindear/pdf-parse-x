@@ -2,6 +2,7 @@ import {
   appendLine,
   cleanLine,
   collapseSpacedCaps,
+  decodeHtmlEntities,
   escapeMarkdownText,
   headingLevel,
   isLetteredSubheading,
@@ -11,7 +12,10 @@ import {
   isRomanSectionHeading,
   joinParagraphLines,
   median,
-  normalizeInline
+  normalizeInline,
+  stripMathResiduePrefix,
+  tidyInlineMath,
+  wrapInlineMathLists
 } from './text-utils.js';
 
 const REFERENCE_START = /^\d+\.\s+\S/;
@@ -19,8 +23,130 @@ const BRACKET_REFERENCE_START = /^\[\d+\]\s*\S/;
 const AUTHOR_YEAR_REFERENCE_START =
   /^[A-Z][^\n]{0,180}\((?:19|20)\d{2}\)[.,]?\s*/;
 const ABSTRACT_START = /^Abstract\b[\u2013\u2014:.\-]?\s*/i;
-const KEYWORDS_START = /^(?:Index Terms|Keywords)\b[\u2013\u2014:.\-]?\s*/i;
+const KEYWORDS_START =
+  /^(?:Index Terms|Keywords|Key ?words(?: and Phrases)?|Additional Key ?words(?: and Phrases)?)\b[\u2013\u2014:.\-]?\s*/i;
+// Markers that terminate an unlabeled abstract (ACM: `CCS Concepts:` then
+// `Additional Key Words and Phrases:`).
+const ABSTRACT_END = /^(?:CCS ?Concepts?|Index Terms|Key ?words|Additional Key ?words)\b/i;
 const RQ_START = /^(RQ\d+:)\s*(.*)$/;
+
+const SUPERSCRIPT_DIGITS = {
+  0: '\u2070',
+  1: '\u00b9',
+  2: '\u00b2',
+  3: '\u00b3',
+  4: '\u2074',
+  5: '\u2075',
+  6: '\u2076',
+  7: '\u2077',
+  8: '\u2078',
+  9: '\u2079'
+};
+
+/**
+ * Author lines carry affiliation markers (`Khan 1,*, Stapleton 2` or IEEE-style
+ * `Yunfan Gaoa, …`). Rendering them as Unicode superscripts keeps the Markdown
+ * free of raw HTML while still reading like footnote markers.
+ */
+const SUPERSCRIPT_LETTERS = {
+  a: '\u1d43',
+  b: '\u1d47',
+  c: '\u1d9c',
+  d: '\u1d48',
+  e: '\u1d49',
+  f: '\u1da0',
+  g: '\u1d4d',
+  h: '\u02b0',
+  i: '\u2071',
+  j: '\u02b2',
+  k: '\u1d4f',
+  l: '\u02e1',
+  m: '\u1d50',
+  n: '\u207f',
+  o: '\u1d52',
+  p: '\u1d56',
+  r: '\u02b3',
+  s: '\u02e2',
+  t: '\u1d57',
+  u: '\u1d58',
+  v: '\u1d5b',
+  w: '\u02b7',
+  x: '\u02e3',
+  y: '\u02b8',
+  z: '\u1dbb'
+};
+
+export function superscriptAffiliationMarks(text, markerLetters = new Set()) {
+  const value = String(text ?? '').replace(
+    /(?<=[\p{L}.])(\s?)(\d{1,2}(?:\s*,\s*\d{1,2})*)(?=[\s,*\u2020\u2021;]|$)/gu,
+    (_match, space, digits) =>
+      `${space}${digits.replace(/\d/g, (digit) => SUPERSCRIPT_DIGITS[digit])}`
+  );
+
+  if (!markerLetters.size) return value;
+
+  // IEEE style: the marker is a small letter glued to (or spaced after) a name,
+  // e.g. `Yunfan Gaoa` / `Haofen Wang a,c`. Only letters that also occur as
+  // affiliation prefixes are converted, and only when most authors carry one.
+  const parts = value.split(/(\s*(?:,|·|;)\s*|\s+and\s+)/);
+  let authorCount = 0;
+  const info = parts.map((part) => {
+    if (part === undefined) return null;
+    if (!part.trim() || /^(?:\s*(?:,|·|;|and)\s*)$/.test(part)) return null;
+
+    authorCount += 1;
+    const match = part.match(/([a-z]{1,6})([*\u2020\u2021]?)$/);
+    if (!match) return null;
+
+    const run = match[1];
+    let suffixLength = 0;
+    while (
+      suffixLength < run.length &&
+      suffixLength < 3 &&
+      markerLetters.has(run[run.length - 1 - suffixLength])
+    ) {
+      suffixLength += 1;
+    }
+    if (!suffixLength) return null;
+
+    const before = part.slice(0, part.length - match[0].length);
+    const attached = /[\p{L}.]$/u.test(before);
+    const spaced = /\s$/.test(before);
+    // A bare `a` / `b` token after a comma is a marker too.
+    const standalone = !before && suffixLength === run.length;
+    if (!attached && !spaced && !standalone) return null;
+
+    return { suffixLength, tail: match[2] ?? '' };
+  });
+
+  const marks = info.filter(Boolean).length;
+  if (marks < 2 || marks * 2 < authorCount) return value;
+
+  return parts
+    .map((part, index) => {
+      const entry = info[index];
+      if (!entry || !part) return part;
+      const keep = part.length - entry.suffixLength - entry.tail.length;
+      const run = part.slice(keep, keep + entry.suffixLength);
+      const superscript = [...run]
+        .map((character) => SUPERSCRIPT_LETTERS[character] ?? character)
+        .join('');
+      return `${part.slice(0, keep)}${superscript}${entry.tail}`;
+    })
+    .join('');
+}
+
+/** Letters used as IEEE affiliation prefixes (`aShanghai …`, `bShanghai …`). */
+function affiliationMarkerLetters(affiliationLines) {
+  const letters = new Set();
+  for (const line of affiliationLines) {
+    const cleaned = normalizeInline(line).replace(/^\*+\s*/, '');
+    const match =
+      cleaned.match(/^([a-z])(?=[A-Z])/) ?? cleaned.match(/^([a-z])\s+[A-Z]/);
+    if (match) letters.add(match[1]);
+  }
+  return letters;
+}
 
 function looksLikeAuthorLine(line) {
   const value = normalizeInline(line);
@@ -29,11 +155,27 @@ function looksLikeAuthorLine(line) {
   if (/^Abstract$/i.test(value)) return false;
   if (/^Table|^Figure|^Fig\.|^Keywords:/i.test(value)) return false;
   if (value.includes('·')) return true;
+  // All-caps author names (ACM/arXiv style): `OMID JAFARI, New Mexico State …`.
+  if (/^[A-Z][A-Z.'\-]*(?:\s+[A-Z][A-Z.'\-]*)+\s*,/.test(value)) return true;
   const commaCount = (value.match(/,/g) ?? []).length;
   return (
     commaCount >= 2 &&
     (/[A-Z][a-z]+\s+[A-Z]/.test(value) || /\*/.test(value))
   );
+}
+
+function isIntroductionLine(line) {
+  const value = normalizeInline(line);
+  return (
+    /^(?:(?:\d+|[IVXLCDM]+)\.?\s+)?Introduction$/i.test(value) ||
+    /^\d+\.?\s+[A-Z]/.test(value)
+  );
+}
+
+/** Long lowercase-running lines are prose, not affiliation continuations. */
+function looksLikeProse(line) {
+  const value = normalizeInline(line);
+  return value.length >= 80 && /[a-z]{4,}/.test(value);
 }
 
 function formatAffiliations(lines) {
@@ -110,9 +252,14 @@ function buildFrontMatter(pageText, metadata) {
     !/^\d+\s+[A-Z]/.test(lines[cursor]) &&
     !/^\*\s*Correspondence/i.test(lines[cursor]) &&
     !ABSTRACT_START.test(lines[cursor]) &&
-    !looksLikeAffiliation(lines[cursor]) &&
+    !ABSTRACT_END.test(lines[cursor]) &&
+    !(looksLikeAffiliation(lines[cursor]) && !looksLikeAuthorLine(lines[cursor])) &&
     !/^(?:(?:Received|Revised|Accepted|Published|Copyright)\b|©)/i.test(lines[cursor])
   ) {
+    if (!looksLikeAuthorLine(lines[cursor]) && looksLikeProse(lines[cursor])) {
+      // The abstract starts here (no `Abstract` label in ACM/arXiv layouts).
+      break;
+    }
     if (!/^[\d,\s]+$/.test(lines[cursor])) {
       authorLines.push(lines[cursor]);
     }
@@ -132,27 +279,59 @@ function buildFrontMatter(pageText, metadata) {
   while (
     cursor < lines.length &&
     !ABSTRACT_START.test(lines[cursor]) &&
+    !ABSTRACT_END.test(lines[cursor]) &&
     !/^(?:(?:Received|Revised|Accepted|Published|Copyright)\b|©)/i.test(lines[cursor])
   ) {
+    const current = lines[cursor];
     if (
-      /^\d+\s+/.test(lines[cursor]) ||
-      /^\*\s*Correspondence/i.test(lines[cursor]) ||
-      looksLikeAffiliation(lines[cursor])
+      /^\d+\s+/.test(current) ||
+      /^\*\s*Correspondence/i.test(current) ||
+      looksLikeAffiliation(current)
     ) {
-      affiliationLines.push(lines[cursor]);
-    } else if (affiliationLines.length) {
-      affiliationLines[affiliationLines.length - 1] += ` ${lines[cursor]}`;
+      affiliationLines.push(current);
+    } else if (!affiliationLines.length) {
+      // Nothing affiliation-like was found before prose: the unlabeled abstract
+      // starts here instead of continuing the (absent) affiliation block.
+      break;
+    } else {
+      affiliationLines[affiliationLines.length - 1] += ` ${current}`;
     }
     cursor += 1;
   }
 
   const abstractLines = [];
+  let abstractLabeled = false;
   if (cursor < lines.length && ABSTRACT_START.test(lines[cursor])) {
+    abstractLabeled = true;
     const first = lines[cursor].replace(ABSTRACT_START, '').trim();
     if (first) abstractLines.push(first);
     cursor += 1;
-    while (cursor < lines.length && !KEYWORDS_START.test(lines[cursor])) {
+    while (cursor < lines.length && !ABSTRACT_END.test(lines[cursor])) {
       abstractLines.push(lines[cursor]);
+      cursor += 1;
+    }
+  } else {
+    // Unlabeled abstract (common in ACM/arXiv templates): everything between
+    // the author block and `CCS Concepts` / keywords / Introduction. No
+    // `## Abstract` heading is added because the PDF has none.
+    while (
+      cursor < lines.length &&
+      !ABSTRACT_END.test(lines[cursor]) &&
+      !isIntroductionLine(lines[cursor])
+    ) {
+      abstractLines.push(lines[cursor]);
+      cursor += 1;
+    }
+  }
+
+  const ccsLines = [];
+  if (cursor < lines.length && /^CCS ?Concepts?\b/i.test(lines[cursor])) {
+    while (
+      cursor < lines.length &&
+      !KEYWORDS_START.test(lines[cursor]) &&
+      !isIntroductionLine(lines[cursor])
+    ) {
+      ccsLines.push(lines[cursor]);
       cursor += 1;
     }
   }
@@ -163,11 +342,7 @@ function buildFrontMatter(pageText, metadata) {
     if (first) keywordsLines.push(first);
     cursor += 1;
   }
-  while (
-    cursor < lines.length &&
-    !/^(?:(?:\d+|[IVXLCDM]+)\.?\s+)?Introduction$/i.test(lines[cursor]) &&
-    !/^\d+\.?\s+[A-Z]/.test(lines[cursor])
-  ) {
+  while (cursor < lines.length && !isIntroductionLine(lines[cursor])) {
     keywordsLines.push(lines[cursor]);
     cursor += 1;
   }
@@ -176,10 +351,25 @@ function buildFrontMatter(pageText, metadata) {
     normalizeInline(titleLines.join(' ')) ||
     normalizeInline(metadata.title) ||
     'PDF Document';
-  const authors = normalizeInline(authorLines.join(' '));
+  // Author lines that each carry their own affiliation (`Name, University, USA`)
+  // read better separated by `;`; wrapped author lists keep plain spaces.
+  const authorSeparator =
+    authorLines.length > 1 && authorLines.every((line) => looksLikeAffiliation(line))
+      ? '; '
+      : ' ';
+  const authors = superscriptAffiliationMarks(
+    normalizeInline(authorLines.join(authorSeparator)),
+    affiliationMarkerLetters(affiliationLines)
+  );
   const abstract = joinParagraphLines(abstractLines);
   const keywords = joinParagraphLines(keywordsLines)
-    .replace(/^(?:Index Terms|Keywords)\s*[:\u2013\u2014-]?\s*/i, '')
+    .replace(
+      /^(?:(?:Additional )?Key ?words(?: and Phrases)?|Index Terms|Keywords)\s*[:\u2013\u2014-]?\s*/i,
+      ''
+    )
+    .trim();
+  const ccs = joinParagraphLines(ccsLines)
+    .replace(/^CCS ?Concepts?\s*[:\u2013\u2014-]?\s*/i, '')
     .trim();
   const blocks = [];
 
@@ -202,8 +392,17 @@ function buildFrontMatter(pageText, metadata) {
   }
 
   if (abstract) {
-    blocks.push({ type: 'heading', level: 2, text: 'Abstract' });
+    if (abstractLabeled) {
+      blocks.push({ type: 'heading', level: 2, text: 'Abstract' });
+    }
     blocks.push({ type: 'paragraph', text: abstract });
+  }
+
+  if (ccs) {
+    blocks.push({
+      type: 'paragraph',
+      text: `**CCS Concepts:** ${ccs}`
+    });
   }
 
   if (keywords) {
@@ -257,6 +456,22 @@ function nextBodyLine(entries, startIndex) {
   return null;
 }
 
+/**
+ * A line that only carries math symbols (`∑ ∑`, `k=1`, `2 2`, `√`) and no
+ * readable words is a leftover fragment of an equation. Keeping it in the text
+ * flow produces noise such as `∑ ∑ j in K-dimensional space …`.
+ */
+export function isMathFragmentOnly(text) {
+  const value = normalizeInline(text);
+  if (!value || value.length > 14) return false;
+  if (/[A-Za-z\u4e00-\u9fff]{2,}/.test(value)) return false;
+  if (/[\u2211\u220f\u222b\u221a\u03b1-\u03c9]/.test(value)) return true;
+  // Sum limits that lost their equation: `i j`, `i j k=1`, `k=1`.
+  if (value.length >= 3 && /^(?:[a-z](?:\s*=\s*\d+)?\s*)+$/i.test(value)) return true;
+  // Several separated digit runs (`1 3`, `2 2`) are split page/formula numbers.
+  return /^[\d\s.,]{1,10}$/.test(value) && value.trim().split(/\s+/).length > 1;
+}
+
 function isUnnumberedHeading(line, nextLine, leftMargin) {
   if (!line || !nextLine) return false;
   if (line.x > leftMargin + 2) return false;
@@ -300,11 +515,18 @@ function buildPageBlocks(page, figures, tables, equations, state, unassignedImag
   }
 
   for (const line of page.lines) {
+    if (line.blockMerged) continue;
     if (isPageFurniture(line.text)) continue;
     if (isOrphanAccentLine(line.text)) continue;
     if (consumed.has(line)) continue;
     if (insideAnyTableBox(line, tables)) continue;
     if (insideAnyEquationBox(line, equations)) continue;
+    if (isMathFragmentOnly(line.text)) continue;
+    // Page numbers split into several runs (`1 3` for page 13) sit in the
+    // header/footer band and carry no content.
+    const nearEdge =
+      line.y < page.height * 0.08 || line.y > page.height * 0.92;
+    if (nearEdge && /^[\d\s.,·\-–—/]{1,10}$/.test(normalizeInline(line.text))) continue;
     entries.push({ kind: 'line', y: line.y, line });
   }
 
@@ -415,9 +637,15 @@ function buildPageBlocks(page, figures, tables, equations, state, unassignedImag
     if (!text) continue;
     // Inline formulas keep `$...$` delimiters; headings and reference starts are
     // still detected on the plain text so the patterns stay stable.
-    const bodyText = line.mathText
-      ? normalizeInline(line.mathText)
-      : text;
+    const bodyText = stripMathResiduePrefix(
+      wrapInlineMathLists(
+        line.mathText
+          ? tidyInlineMath(decodeHtmlEntities(normalizeInline(line.mathText)))
+          : text
+      )
+    );
+    // Lines that were nothing but split-fraction residue are dropped.
+    if (!bodyText) continue;
 
     if (/^Disclaimer\/Publisher/i.test(text) && state.inReferences) {
       state.inReferences = false;
@@ -486,10 +714,13 @@ function buildPageBlocks(page, figures, tables, equations, state, unassignedImag
     // paragraph split by pagination) would be taken for a numbered section.
     const previousText = previousLine ? normalizeInline(previousLine.text) : '';
     const startsBlock = !previousText || /[.!?:;)"'\u201d\u2019%]$/.test(previousText);
+    // ACM-style headings are the same size as body text but bold (`g_d0_f3`),
+    // so a bold font is accepted as a heading signal next to larger height.
+    const boldLine = /f[23]\b/i.test(line.fontName ?? '');
     const numberedHeading =
       Boolean(numberedMatch) &&
       startsBlock &&
-      line.height >= 9.9 &&
+      (line.height >= 9.9 || boldLine) &&
       numberedMatch[1].split('.').length <= 4 &&
       numberedMatch[2].length <= 110 &&
       !/[.;:,]$/.test(numberedMatch[2]) &&
@@ -608,16 +839,21 @@ function equationBlock(equation) {
     return `$$\n${equation.latex}\n$$`;
   }
 
-  const number = equation.number ?? '';
+  const hasNumber = equation.number !== null && equation.number !== undefined;
+  const label = hasNumber
+    ? `Equation ${equation.number}`
+    : `公式原图（第 ${equation.pageNumber} 页）`;
+  const number = hasNumber ? equation.number : '';
+
   if (equation.file) {
     return [
       '<div class="equation-fallback">',
-      `  <img src="${equation.file}" alt="Equation ${number}"${equation.width ? ` width="${Math.round(equation.width / 2)}"` : ''} loading="lazy">`,
+      `  <img src="${equation.file}" alt="${label}"${equation.width ? ` width="${Math.round(equation.width / 2)}"` : ''} loading="lazy">`,
       '</div>'
     ].join('\n');
   }
 
-  return `<div class="equation-fallback"><span class="equation-missing">公式 ${number} 未生成</span></div>`;
+  return `<div class="equation-fallback"><span class="equation-missing">${hasNumber ? `公式 ${number} 未生成` : label}</span></div>`;
 }
 
 function renderBlocks(blocks) {

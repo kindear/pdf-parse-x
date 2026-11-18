@@ -8,6 +8,7 @@ const progressBar = document.getElementById('progressBar');
 const progressPercent = document.getElementById('progressPercent');
 const progressLabel = document.getElementById('progressLabel');
 const statusBox = document.getElementById('statusBox');
+const translateToggle = document.getElementById('translateToggle');
 
 let busy = false;
 let progressStream = null;
@@ -50,6 +51,7 @@ function setBusy(value, label = '正在处理…') {
   fileInput.disabled = value;
   sampleButton.disabled = value;
   refreshButton.disabled = value;
+  if (translateToggle) translateToggle.disabled = value;
   if (value) {
     progressWrap.hidden = false;
     progressLabel.textContent = label;
@@ -103,8 +105,19 @@ function beginProgressStream(label) {
       const payload = JSON.parse(event.data);
       // Only the newest line stays visible: each event overwrites the label.
       progressLabel.textContent = progressLine(payload);
-      if (payload.status === 'done' || payload.status === 'error') {
-        setProgress((payload.index / (payload.total || 1)) * 100);
+      const stepTotal = payload.total || 1;
+      if (payload.status === 'progress' && Number(payload.progress?.total) > 0) {
+        // Long stages (翻译、公式、表格) report done/total; the bar follows them
+        // inside the current step instead of jumping only when the step ends.
+        const stepDone = Math.min(
+          1,
+          Number(payload.progress.done) / Number(payload.progress.total)
+        );
+        setProgress(((payload.index - 1 + stepDone) / stepTotal) * 100);
+      } else if (payload.status === 'start') {
+        setProgress(((payload.index - 1) / stepTotal) * 100);
+      } else if (payload.status === 'done' || payload.status === 'error') {
+        setProgress((payload.index / stepTotal) * 100);
       }
     } catch {
       // Malformed frame: keep the previous label.
@@ -156,6 +169,7 @@ function documentCard(document) {
       </div>
       <div class="card-actions">
         <a class="button primary" href="${escapeHtml(document.previewUrl)}">打开预览</a>
+        ${document.hasChinese ? `<a class="button" href="${escapeHtml(document.chinesePreviewUrl)}">中文预览</a>` : `<button class="button" type="button" data-translate="${escapeHtml(document.id)}">翻译中文</button>`}
         <a class="button" href="${escapeHtml(document.markdownUrl)}" download>下载 MD</a>
         <button class="button danger" type="button" data-delete="${escapeHtml(document.id)}">删除</button>
       </div>
@@ -211,6 +225,7 @@ function uploadFile(file) {
   const formData = new FormData();
   formData.append('pdf', file);
   formData.append('progressId', progressId);
+  formData.append('translate', translateToggle?.checked ? 'true' : 'false');
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/convert');
@@ -294,7 +309,10 @@ sampleButton.addEventListener('click', async () => {
     const response = await fetch('/api/convert-sample', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ progressId })
+      body: JSON.stringify({
+        progressId,
+        translate: Boolean(translateToggle?.checked)
+      })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || '示例解析失败。');
@@ -314,11 +332,53 @@ sampleButton.addEventListener('click', async () => {
   }
 });
 
+async function translateDocument(id) {
+  if (busy || !id) return;
+
+  clearStatus();
+  setBusy(true, '正在翻译…');
+  const startedAt = performance.now();
+  const progressId = beginProgressStream('正在翻译…');
+
+  try {
+    const response = await fetch(
+      `/api/documents/${encodeURIComponent(id)}/translate`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ progressId })
+      }
+    );
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || '翻译失败。');
+
+    setProgress(100);
+    showStatus(
+      'success',
+      `中文版已生成：${escapeHtml(payload.translated)}/${escapeHtml(payload.total)} 段 · ${escapeHtml(
+        formatDuration(performance.now() - startedAt)
+      )}<br><a href="${escapeHtml(payload.chinesePreviewUrl)}">打开中文预览 →</a>`
+    );
+    await loadDocuments();
+  } catch (error) {
+    showStatus('error', escapeHtml(error.message));
+  } finally {
+    endProgressStream();
+    setBusy(false);
+  }
+}
+
 refreshButton.addEventListener('click', () => {
   loadDocuments();
 });
 
 documentGrid.addEventListener('click', async (event) => {
+  const translateButton = event.target.closest('[data-translate]');
+  if (translateButton) {
+    await translateDocument(translateButton.getAttribute('data-translate'));
+    return;
+  }
+
   const button = event.target.closest('[data-delete]');
   if (!button) return;
   const id = button.getAttribute('data-delete');

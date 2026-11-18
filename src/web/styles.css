@@ -346,6 +346,28 @@ code {
   font-size: 10px;
 }
 
+.translate-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.translate-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: #12a594;
+  cursor: pointer;
+}
+
+.translate-toggle code {
+  font-size: 10px;
+}
+
 .button {
   display: inline-flex;
   align-items: center;

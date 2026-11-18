@@ -823,7 +823,11 @@ function detectTables(lines, rules, items, pageHeight, pageNumber, pageWidth) {
     );
     if (!table) continue;
 
-    if (pageWidth < 500) table.imageOnly = true;
+    // Cell density is not a quality signal: check-mark matrices and merged
+    // headers are legitimately sparse. Only a grid with no usable data is kept
+    // as the original crop; sparse grids still get a Markdown table plus the
+    // low-confidence warning in the builder.
+    if (!table.rows.length || table.confidence === 0) table.imageOnly = true;
     usedCaptionY.add(Math.round(caption.line.y * 10) / 10);
     usedNumbers.add(table.number);
     tables.push(table);
@@ -1055,6 +1059,215 @@ function detectEquations(lines, pageWidth, pageHeight, pageNumber) {
       };
     })
     .sort((a, b) => b.box.top - a.box.top);
+}
+
+const MATH_GLYPHS =
+  /[\u2211\u220f\u222b\u221a\u2202\u2207\u00b1\u00d7\u00f7\u2248\u2260\u2264\u2265\u2261\u221e\u2192\u2190\u21d2\u03b1-\u03c9\u0391-\u03a9\u03d5\u03d1]/g;
+const PROSE_STOPWORDS =
+  /\b(?:the|and|of|in|for|with|that|this|are|is|was|were|be|if|then|when|where|such|from|by|as|on|at|to)\b/gi;
+
+function countWords(text) {
+  return (text.match(/[A-Za-z]{2,}/g) ?? []).length;
+}
+
+function dominantBodyFont(lines) {
+  const counts = new Map();
+  for (const line of lines) {
+    if (countWords(line.text) < 4) continue;
+    const font = line.fontName ?? '';
+    if (!font) continue;
+    counts.set(font, (counts.get(font) ?? 0) + 1);
+  }
+
+  let best = '';
+  let bestCount = 0;
+  for (const [font, count] of counts) {
+    if (count > bestCount) {
+      best = font;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/**
+ * Numbered display equations are found via their right-aligned `(n)` marker.
+ * Unnumbered ones (common in Springer/Elsevier layouts) are detected by their
+ * typography instead: short, symbol-heavy lines typeset in a font other than
+ * the body font, clustered vertically. Their text layer is usually scrambled
+ * (separate runs for sum limits, fractions and radicals), so the region is kept
+ * as a crop and can be transcribed to LaTeX by the vision model.
+ */
+function detectUnnumberedEquations(lines, pageWidth, pageHeight, pageNumber, numbered) {
+  const bodyFont = dominantBodyFont(lines);
+  const blocked = [];
+  for (const equation of numbered) {
+    // Nearby fragments (sum limits, fraction numerators) belong to the numbered
+    // equation even when they sit outside its exact box.
+    blocked.push({
+      left: equation.box.left - 12,
+      right: equation.box.right + 12,
+      top: equation.box.top + 36,
+      bottom: equation.box.bottom - 36
+    });
+  }
+
+  const inBlocked = (line) =>
+    blocked.some(
+      (box) =>
+        line.y <= box.top && line.y >= box.bottom && line.x >= box.left && line.x <= box.right
+    );
+
+  const candidates = lines.filter((line) => {
+    const text = normalizeInline(line.text);
+    if (!text || text.length > 90) return false;
+    if (line.y < 45 || line.y > pageHeight - 45) return false;
+    if (isPageFurniture(text)) return false;
+    if (/^(?:Table|Figure|Fig\.)\s*\d/i.test(text)) return false;
+    if (inBlocked(line)) return false;
+
+    const glyphs = (text.match(MATH_GLYPHS) ?? []).length;
+    const letters = (text.match(/[A-Za-z]/g) ?? []).length;
+    const stopwords = (text.match(PROSE_STOPWORDS) ?? []).length;
+    const operator = /[=\u2248\u2264\u2265<>]/.test(text);
+    // Math-font lines may carry a few multi-letter names (`log`, `min`); plain
+    // prose sharing the line still has everyday stopwords and stays rejected.
+    const words = countWords(text);
+    if (words > 3 && !(operator && words <= 6)) return false;
+    // Two or more everyday words means this is prose with inline math.
+    if (stopwords >= 2) return false;
+    if (letters > 24 && glyphs < 2) return false;
+    const mathish = glyphs > 0 || letters <= 2;
+    if (!mathish) return false;
+
+    // Body-font prose without math glyphs is never a display equation.
+    if (bodyFont && line.fontName === bodyFont) return false;
+
+    // A display equation is set apart from the text block: indented, centered,
+    // or clearly narrower than the body column.
+    const indented = line.x > pageWidth * 0.16;
+    const narrow = line.width < pageWidth * 0.55;
+    return indented || narrow;
+  });
+
+  const clusters = [];
+  for (const line of [...candidates].sort((a, b) => b.y - a.y)) {
+    const current = clusters[clusters.length - 1];
+    // Compare with the line just added (limits sit right under the row above),
+    // but keep a cap on the total height so two equations never fuse.
+    const gap = current ? current.lastY - line.y : Number.POSITIVE_INFINITY;
+    const span = current ? current.top - line.y : Number.POSITIVE_INFINITY;
+    if (current && gap <= 26 && span <= 40) {
+      current.lines.push(line);
+      current.lastY = line.y;
+      current.top = Math.max(current.top, line.y + line.height);
+      continue;
+    }
+    clusters.push({ lines: [line], top: line.y + line.height, lastY: line.y });
+  }
+
+  return clusters
+    .filter((cluster) => {
+      const joined = cluster.lines.map((line) => normalizeInline(line.text)).join(' ');
+      const glyphs = (joined.match(MATH_GLYPHS) ?? []).length;
+      const hasOperator = /[=\u2248\u2264\u2265<>]/.test(joined);
+      const width =
+        Math.max(...cluster.lines.map((line) => line.x + line.width)) -
+        Math.min(...cluster.lines.map((line) => line.x));
+      // Real display equations carry an operator; a formula typeset over
+      // several baselines (limit, numerator, denominator) is accepted even when
+      // it is narrow, as long as the cluster really stacks math rows.
+      if (!hasOperator) return false;
+      // A sentence that swallows an inline formula (`… = 1200 benchmark
+      // observations. We propose…`) is running text, not a display equation.
+      if (/\.\s+[A-Z]/.test(joined)) return false;
+      const stacked = cluster.lines.length >= 3 && glyphs >= 2;
+      if (width < pageWidth * 0.25 && glyphs < 3 && !stacked) return false;
+      if (width > pageWidth * 0.95) return false;
+      return true;
+    })
+    .map((cluster) => {
+      const left = Math.max(0, Math.min(...cluster.lines.map((line) => line.x)) - 8);
+      const right = Math.min(
+        pageWidth,
+        Math.max(...cluster.lines.map((line) => line.x + line.width)) + 8
+      );
+      const top = Math.min(
+        pageHeight,
+        Math.max(...cluster.lines.map((line) => line.y + line.height)) + 5
+      );
+      const bottom = Math.max(0, Math.min(...cluster.lines.map((line) => line.y)) - 5);
+
+      return {
+        pageNumber,
+        number: null,
+        unnumbered: true,
+        anchorY: Math.max(...cluster.lines.map((line) => line.y)),
+        numberBox: null,
+        box: { left, right, top, bottom },
+        lines: cluster.lines.map((line) => ({
+          y: line.y,
+          x: line.x,
+          text: line.text
+        }))
+      };
+    })
+    .sort((a, b) => b.box.top - a.box.top);
+}
+
+/**
+ * Join the stray math fragments that belong to an equation (sum signs, limits,
+ * `k=1`, lone digits) into the nearest equation box. Without this they stay in
+ * the text flow and show up as `∑ ∑ …` noise inside paragraphs.
+ */
+function absorbMathFragments(lines, equations, pageHeight) {
+  if (!equations.length) return;
+
+  const taken = new Set();
+  for (const equation of equations) {
+    for (const line of equation.lines ?? []) {
+      taken.add(`${line.y}:${line.x}:${line.text}`);
+    }
+  }
+
+  for (const line of lines) {
+    const text = normalizeInline(line.text);
+    if (!text || text.length > 40) continue;
+    if (line.y < 45 || line.y > pageHeight - 45) continue;
+    const key = `${line.y}:${line.x}:${line.text}`;
+    if (taken.has(key)) continue;
+
+    const words = countWords(text);
+    const glyphs = (text.match(MATH_GLYPHS) ?? []).length;
+    const symbolFragment = glyphs > 0 && words <= 1;
+    const tinyFragment = text.length <= 8 && /^[\d\s.,·+\-–—=]+$/.test(text);
+    // Sum limits that lost their equation row: `i j`, `i j k=1`, `k=1`.
+    const limitFragment =
+      text.length <= 12 && /^(?:[a-z](?:\s*=\s*\d+)?\s*)+$/i.test(text);
+    if (!symbolFragment && !tinyFragment && !limitFragment) continue;
+
+    let nearest = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const equation of equations) {
+      const distance = Math.abs((equation.anchorY ?? equation.box.top) - line.y);
+      if (distance < nearestDistance) {
+        nearest = equation;
+        nearestDistance = distance;
+      }
+    }
+
+    if (!nearest || nearestDistance > (symbolFragment ? 72 : limitFragment ? 40 : 42)) continue;
+
+    taken.add(key);
+    nearest.lines = nearest.lines ?? [];
+    nearest.lines.push({ y: line.y, x: line.x, text: line.text });
+    nearest.box = {
+      left: Math.min(nearest.box.left, line.x - 6),
+      right: Math.max(nearest.box.right, line.x + line.width + 6),
+      top: Math.max(nearest.box.top, line.y + line.height + 4),
+      bottom: Math.min(nearest.box.bottom, line.y - 4)
+    };
+  }
 }
 
 function detectFigures(lines, pageHeight, pageNumber) {
@@ -1342,7 +1555,23 @@ export async function extractLayout(pdfData) {
         viewport.width
       );
       const figures = detectFigures(lines, viewport.height, pageNumber);
-      const equations = detectEquations(lines, viewport.width, viewport.height, pageNumber);
+      const numberedEquations = detectEquations(
+        lines,
+        viewport.width,
+        viewport.height,
+        pageNumber
+      );
+      const equations = [
+        ...numberedEquations,
+        ...detectUnnumberedEquations(
+          lines,
+          viewport.width,
+          viewport.height,
+          pageNumber,
+          numberedEquations
+        )
+      ];
+      absorbMathFragments(lines, equations, viewport.height);
 
       pages.push({
         pageNumber,

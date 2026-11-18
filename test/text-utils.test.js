@@ -1,16 +1,83 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  decodeHtmlEntities,
   dehyphenateJoin,
+  escapeMarkdownText,
   isOrphanAccentLine,
   isPageFurniture,
   joinParagraphLines,
   joinTextItems,
   markdownTable,
   normalizeTableHeader,
-  renderInlineMath
+  renderInlineMath,
+  stripMathResiduePrefix,
+  tidyInlineMath,
+  wrapInlineMathLists
 } from '../src/lib/text-utils.js';
 import { extractToc } from '../src/lib/preview.js';
+
+test('tidyInlineMath fuses fragments separated only by math punctuation', () => {
+  assert.equal(
+    tidyInlineMath('and [ $u_{1k}$ $,u_{2k}$, · · · $,u_{Ik}$ ]T are the vectors'),
+    'and $[u_{1k}, u_{2k}, \\cdots, u_{Ik}]^{\\mathsf{T}}$ are the vectors'
+  );
+  assert.equal(
+    tidyInlineMath('where $\\varphi_{ik}$ = $p_{i+}$ $u_{ik}$ and more'),
+    'where $\\varphi_{ik} = p_{i+} u_{ik}$ and more'
+  );
+  assert.equal(
+    tidyInlineMath('Let $p_{ij}$ = $x_{ij}$ / $x_{i+}$, then'),
+    'Let $p_{ij} = x_{ij}/x_{i+}$, then'
+  );
+  // A prime typeset as its own script run must fold into the subscript.
+  assert.equal(
+    tidyInlineMath("the $p_{i} _{'}j /p_{i} _{'}+$ proportions"),
+    "the $p_{i'}j /p_{i'}+$ proportions"
+  );
+});
+
+test('tidyInlineMath leaves prose gaps untouched', () => {
+  const line = 'If $p_{ij} = 0$, then $PMI(i, j) = -\\infty$ for the pair';
+  assert.equal(tidyInlineMath(line), line);
+});
+
+test('split-fraction residue is stripped from the line start', () => {
+  assert.equal(
+    stripMathResiduePrefix('− $1_{2}$ − $1_{2}$ − $1_{2}$ so the terms drop out'),
+    'so the terms drop out'
+  );
+  assert.equal(stripMathResiduePrefix('$1_{2}$ T $e_{i}$ = [ $\\sigma_{1}$ ...'), 'T $e_{i}$ = [ $\\sigma_{1}$ ...');
+  assert.equal(stripMathResiduePrefix('− $1_{2}$ − $1_{2}$'), '');
+  assert.equal(stripMathResiduePrefix('1/2 1/2 words $U_{k}$ for embeddings'), 'words $U_{k}$ for embeddings');
+  assert.equal(stripMathResiduePrefix('Normal prose stays untouched.'), 'Normal prose stays untouched.');
+});
+
+test('prose math lists are wrapped as inline math', () => {
+  assert.equal(
+    wrapInlineMathLists('Scores $\\varphi_{ik}$, k = 1, 2, · · ·, K and vectors'),
+    'Scores $\\varphi_{ik}$, $k = 1, 2, \\cdots, K$ and vectors'
+  );
+  assert.equal(
+    wrapInlineMathLists('for j = 1, 2, · · ·, J dimensions'),
+    'for $j = 1, 2, \\cdots, J$ dimensions'
+  );
+  assert.equal(wrapInlineMathLists('nothing to wrap here'), 'nothing to wrap here');
+});
+
+test('HTML entities from model answers are decoded once', () => {
+  assert.equal(decodeHtmlEntities('0 &lt; p_{ij} &lt; p_{i+}'), '0 < p_{ij} < p_{i+}');
+  assert.equal(decodeHtmlEntities('&amp;lt;'), '&lt;');
+  assert.equal(decodeHtmlEntities('plain text'), 'plain text');
+});
+
+test('angle brackets are escaped in prose but kept inside inline math', () => {
+  assert.equal(escapeMarkdownText('a < b and c > d'), 'a &lt; b and c &gt; d');
+  assert.equal(
+    escapeMarkdownText('when 0 $< p_{ij} < p_{i+} p_{+j}$ holds'),
+    'when 0 $< p_{ij} < p_{i+} p_{+j}$ holds'
+  );
+});
 
 test('inline math wraps subscripted variables in $...$', () => {
   const line = renderInlineMath(
@@ -24,8 +91,8 @@ test('inline math wraps subscripted variables in $...$', () => {
   );
 
   assert.ok(line);
-  assert.match(line, /\$p_\{ij\}\$/);
-  assert.match(line, /x_\{ij\}\$/);
+  // `$p_{ij}$ = $x_{ij}$` is one formula; the fragments are fused.
+  assert.equal(line, '$p_{ij} = x_{ij}$');
 });
 
 test('footnote-style superscript digits are not turned into math', () => {

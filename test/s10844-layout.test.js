@@ -31,10 +31,27 @@ test(
     assert.match(figures[0].caption, /^Fig\. 1/);
     assert.match(figures[1].caption, /^Fig\. 2/);
 
-    assert.equal(equations.length, 17);
+    const numbered = equations.filter((equation) => equation.number !== null);
+    const unnumbered = equations.filter((equation) => equation.number === null);
+
+    assert.equal(numbered.length, 17);
     assert.deepEqual(
-      equations.map((equation) => equation.number),
+      numbered.map((equation) => equation.number),
       Array.from({ length: 17 }, (_, index) => index + 1)
+    );
+
+    // The paper also has unnumbered display equations (cosine distance, word
+    // vectors, GloVe/SVD variants). They must be detected as standalone blocks
+    // so they can be rendered as `$$...$$` instead of leaking into prose.
+    assert.ok(
+      unnumbered.length >= 4,
+      `expected at least 4 unnumbered display equations, got ${unnumbered.length}`
+    );
+    assert.ok(
+      unnumbered.every(
+        (equation) =>
+          equation.box.bottom < equation.box.top && equation.lines.length >= 1
+      )
     );
 
     const table6 = tables.find((table) => table.number === 6);

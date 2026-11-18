@@ -9,14 +9,28 @@ import { buildMarkdown } from './markdown-builder.js';
 import { computeReport } from './report.js';
 import {
   loadFormulaOverrides,
+  finalizeLatex,
   resolveFormulaLatex
 } from './formula-latex.js';
 import {
   convertEquationWithLlm,
   getFormulaLlmConfig,
-  mapWithConcurrency
+  mapWithConcurrency,
+  rescueEquationsWithLlm
 } from './formula-llm.js';
 import { writePreviewFile } from './preview.js';
+import {
+  getMathLlmConfig,
+  isMathDebrisLine,
+  loadMathLineCache,
+  mathLineCacheKey,
+  needsMathTranscription,
+  rescueFragmentsWithLlm,
+  saveMathLineCache,
+  transcribeBlockWithLlm,
+  transcribeLineWithLlm
+} from './math-llm.js';
+import { getTranslateConfig, translateMarkdown } from './translate.js';
 import {
   markdownTable,
   normalizeInline,
@@ -398,6 +412,394 @@ function screenshotForPage(screenshots, pageNumber) {
   return screenshots.find((screenshot) => screenshot.pageNumber === pageNumber);
 }
 
+async function cropLineBuffer(screenshot, page, line) {
+  const scaleX = screenshot.width / page.width;
+  const scaleY = screenshot.height / page.height;
+  const height = Math.max(line.height, 6);
+  const left = (line.x - 8) * scaleX;
+  const top = (page.height - (line.y + height * 0.55)) * scaleY;
+  const width = (line.width + 16) * scaleX;
+  const cropHeight = height * 1.5 * scaleY;
+  const rect = extractRect(screenshot, left, top, width, cropHeight);
+
+  return sharp(Buffer.from(screenshot.data)).extract(rect).png().toBuffer();
+}
+
+async function cropBlockBuffer(screenshot, page, lines) {
+  const scaleX = screenshot.width / page.width;
+  const scaleY = screenshot.height / page.height;
+  const left = Math.min(...lines.map((line) => line.x)) - 10;
+  const right = Math.max(...lines.map((line) => line.x + line.width)) + 10;
+  const top = Math.max(...lines.map((line) => line.y + line.height)) + 6;
+  const bottom = Math.min(...lines.map((line) => line.y)) - 6;
+  const rect = extractRect(
+    screenshot,
+    left * scaleX,
+    (page.height - top) * scaleY,
+    Math.max(1, (right - left) * scaleX),
+    Math.max(1, (top - bottom) * scaleY)
+  );
+
+  return sharp(Buffer.from(screenshot.data)).extract(rect).png().toBuffer();
+}
+
+function looksLikeHeadingLine(line) {
+  const text = normalizeInline(line.text ?? '');
+  if (!text || text.length > 80) return false;
+  if (/[.!?;:]$/.test(text)) return false;
+  return (text.match(/[A-Za-z]{2,}/g) ?? []).length <= 8;
+}
+
+/**
+ * A block transcription has to be roughly as long as the source text; a much
+ * shorter answer means content was dropped instead of re-typeset.
+ */
+function isPlausibleBlock(text, block) {
+  if (!text) return false;
+  const source = normalizeInline(block.map((line) => line.text).join(' '));
+  if (source.length < 24) return true;
+  const ratio = text.length / source.length;
+  return ratio >= 0.4 && ratio <= 2.5;
+}
+
+/**
+ * Vertical math debris (a numerator row, a denominator row plus a lone ∑) means
+ * an inline formula was split over several text-layer lines. Collect those runs
+ * together with the prose lines around them so the block can be re-typeset as
+ * one paragraph instead of duplicated fragments.
+ */
+function collectBrokenMathBlocks(page) {
+  const lines = page.lines;
+  const insideBox = (line) =>
+    (page.tables ?? []).some(
+      (table) => line.y <= table.box.top + 2 && line.y >= table.box.bottom - 2
+    ) ||
+    (page.equations ?? []).some(
+      (equation) =>
+        line.y <= equation.box.top + 2 &&
+        line.y >= equation.box.bottom - 2 &&
+        line.x >= equation.box.left - 2 &&
+        line.x <= equation.box.right + 2
+    );
+
+  const sameColumn = (a, b) => Math.abs(a.x - b.x) <= Math.max(28, page.width * 0.12);
+  const stacked = (a, b) => Math.abs(a.y - b.y) <= Math.max(a.height, b.height) * 2.4;
+  const nearEdge = (line) => line.y < page.height * 0.08 || line.y > page.height * 0.92;
+
+  const blocks = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!isMathDebrisLine(line.text) || insideBox(line) || nearEdge(line)) {
+      index += 1;
+      continue;
+    }
+
+    let start = index;
+    let end = index;
+    while (
+      end + 1 < lines.length &&
+      isMathDebrisLine(lines[end + 1].text) &&
+      !insideBox(lines[end + 1]) &&
+      !nearEdge(lines[end + 1]) &&
+      stacked(lines[end], lines[end + 1])
+    ) {
+      end += 1;
+    }
+
+    let contextStart = start;
+    for (let step = 0; step < 2 && contextStart > 0; step += 1) {
+      const previous = lines[contextStart - 1];
+      if (
+        insideBox(previous) ||
+        nearEdge(previous) ||
+        !stacked(previous, lines[contextStart]) ||
+        !sameColumn(previous, lines[contextStart]) ||
+        looksLikeHeadingLine(previous)
+      ) {
+        break;
+      }
+      contextStart -= 1;
+    }
+
+    let contextEnd = end;
+    if (contextEnd + 1 < lines.length) {
+      const next = lines[contextEnd + 1];
+      if (
+        !insideBox(next) &&
+        !nearEdge(next) &&
+        stacked(next, lines[contextEnd]) &&
+        sameColumn(next, lines[contextEnd]) &&
+        !looksLikeHeadingLine(next)
+      ) {
+        contextEnd += 1;
+      }
+    }
+
+    // One stray `1/2` fragment is handled by the residue rules; a block pass is
+    // only worth it when at least two math rows really stacked.
+    const blockLines = lines.slice(contextStart, Math.min(contextEnd + 1, contextStart + 8));
+    const debrisCount = blockLines.filter((entry) => isMathDebrisLine(entry.text)).length;
+    if (debrisCount < 2) {
+      index = contextEnd + 1;
+      continue;
+    }
+
+    blocks.push(blockLines);
+    index = contextEnd + 1;
+  }
+
+  return blocks;
+}
+
+/**
+ * Cross-line formulas are beyond line-level rules: crop the whole fragment and
+ * let the vision model rebuild it as one paragraph, preserving content order.
+ */
+async function transcribeBrokenMathBlocks({
+  layout,
+  screenshots,
+  outputDir,
+  config,
+  fetchImpl,
+  warnings
+}) {
+  const stats = { blocks: 0, transcribed: 0, cached: 0, failed: 0, failedJobs: [] };
+
+  const jobs = [];
+  for (const page of layout.pages) {
+    const screenshot = screenshotForPage(screenshots, page.pageNumber);
+    if (!screenshot) continue;
+    for (const block of collectBrokenMathBlocks(page)) jobs.push({ page, block, screenshot });
+  }
+  stats.blocks = jobs.length;
+  if (!jobs.length) return stats;
+
+  const cachePath = path.join(outputDir, 'math-lines.llm.json');
+  const cache = await loadMathLineCache(cachePath);
+
+  await mapWithConcurrency(jobs, config.concurrency, async ({ page, block, screenshot }) => {
+    try {
+      const buffer = await cropBlockBuffer(screenshot, page, block);
+      const key = `block:${mathLineCacheKey(buffer, config.model)}`;
+      let text = cache.lines[key];
+
+      if (typeof text === 'string' && isPlausibleBlock(text, block)) {
+        stats.cached += 1;
+      } else {
+        text = await transcribeBlockWithLlm(buffer, config, { fetchImpl });
+        if (text && isPlausibleBlock(text, block)) {
+          cache.lines[key] = text;
+          stats.transcribed += 1;
+        } else {
+          text = null;
+          delete cache.lines[key];
+        }
+      }
+
+      if (!text) {
+        stats.failed += 1;
+        stats.failedJobs.push({ page, block, screenshot });
+        return;
+      }
+
+      const anchor = block[0];
+      anchor.mathText = text;
+      anchor.mathSource = 'llm-block';
+      for (let index = 1; index < block.length; index += 1) {
+        block[index].blockMerged = true;
+      }
+    } catch {
+      stats.failed += 1;
+      stats.failedJobs.push({ page, block, screenshot });
+    }
+  });
+
+  await saveMathLineCache(cachePath, cache).catch(() => {});
+  return stats;
+}
+
+/**
+ * Lines whose text layer interleaved math glyphs with prose cannot be fixed by
+ * rules. Crop them and let the vision model re-typeset the line with `$...$`
+ * math, then keep the result as `line.mathText` for the Markdown builder.
+ */
+async function transcribeMangledLines({
+  layout,
+  screenshots,
+  outputDir,
+  config,
+  fetchImpl,
+  warnings,
+  emit
+}) {
+  const stats = {
+    candidates: 0,
+    transcribed: 0,
+    cached: 0,
+    failed: 0,
+    blocks: 0,
+    rescued: 0
+  };
+  if (!config.enabled) return stats;
+
+  const blockStats = await transcribeBrokenMathBlocks({
+    layout,
+    screenshots,
+    outputDir,
+    config,
+    fetchImpl,
+    warnings
+  });
+  stats.blocks = blockStats.transcribed + blockStats.cached;
+
+  const candidates = [];
+  for (const page of layout.pages) {
+    const screenshot = screenshotForPage(screenshots, page.pageNumber);
+    if (!screenshot) continue;
+
+    for (const line of page.lines) {
+      if (line.blockMerged || line.mathSource === 'llm-block') continue;
+      if (!needsMathTranscription(line)) continue;
+      const insideTable = (page.tables ?? []).some(
+        (table) =>
+          line.y <= table.box.top + 2 && line.y >= table.box.bottom - 2
+      );
+      if (insideTable) continue;
+      const insideEquation = (page.equations ?? []).some(
+        (equation) =>
+          line.y <= equation.box.top + 2 &&
+          line.y >= equation.box.bottom - 2 &&
+          line.x >= equation.box.left - 2 &&
+          line.x <= equation.box.right + 2
+      );
+      if (insideEquation) continue;
+      candidates.push({ page, line, screenshot });
+    }
+  }
+
+  stats.candidates = candidates.length;
+  if (!candidates.length) return stats;
+
+  const budget =
+    config.maxLines > 0 ? candidates.slice(0, config.maxLines) : candidates;
+  if (candidates.length > budget.length) {
+    warnings.push(
+      `${candidates.length - budget.length} 行混排公式超出转写上限（MATH_LLM_MAX_LINES），已保留原文。`
+    );
+  }
+
+  const cachePath = path.join(outputDir, 'math-lines.llm.json');
+  const cache = await loadMathLineCache(cachePath);
+  let done = 0;
+  const failedLines = [];
+
+  await mapWithConcurrency(budget, config.concurrency, async ({ page, line, screenshot }) => {
+    try {
+      const buffer = await cropLineBuffer(screenshot, page, line);
+      const key = mathLineCacheKey(buffer, config.model);
+      let text = cache.lines[key];
+
+      if (typeof text === 'string' && text) {
+        stats.cached += 1;
+      } else {
+        text = await transcribeLineWithLlm(buffer, config, { fetchImpl });
+        if (text) {
+          cache.lines[key] = text;
+          stats.transcribed += 1;
+        }
+      }
+
+      if (text) {
+        line.mathText = text;
+        line.mathSource = 'llm';
+      } else {
+        stats.failed += 1;
+        failedLines.push({ page, line, screenshot });
+      }
+    } catch {
+      stats.failed += 1;
+      failedLines.push({ page, line, screenshot });
+    } finally {
+      done += 1;
+      emit({
+        index: 3,
+        label: '公式 LaTeX',
+        status: 'progress',
+        progress: { done, total: budget.length }
+      });
+    }
+  });
+
+  await saveMathLineCache(cachePath, cache).catch(() => {});
+
+  // Page-level rescue: only fragments whose own crop failed are listed, so the
+  // normal route keeps its exact behaviour.
+  const failedBlocks = blockStats.failedJobs ?? [];
+  if (failedLines.length || failedBlocks.length) {
+    const grouped = new Map();
+    const addJob = (job, kind) => {
+      const list = grouped.get(job.page.pageNumber) ?? [];
+      list.push({
+        ...job,
+        kind,
+        id: `${kind}-${list.length + 1}`,
+        source: kind === 'block'
+          ? job.block.map((entry) => entry.text).join(' ')
+          : job.line.text
+      });
+      grouped.set(job.page.pageNumber, list);
+    };
+    for (const job of failedBlocks) addJob(job, 'block');
+    for (const job of failedLines) addJob(job, 'line');
+
+    await mapWithConcurrency([...grouped.values()], config.concurrency, async (items) => {
+      const { screenshot } = items[0];
+      try {
+        const imageBuffer = await sharp(Buffer.from(screenshot.data)).png().toBuffer();
+        const rescued = await rescueFragmentsWithLlm({
+          imageBuffer,
+          fragments: items.map((item) => ({ id: item.id, text: item.source })),
+          config,
+          fetchImpl
+        });
+
+        for (const item of items) {
+          const text = rescued.get(item.id);
+          if (!text) continue;
+          if (item.kind === 'block') {
+            if (!isPlausibleBlock(text, item.block)) continue;
+            const anchor = item.block[0];
+            anchor.mathText = text;
+            anchor.mathSource = 'llm-block-rescue';
+            for (let index = 1; index < item.block.length; index += 1) {
+              item.block[index].blockMerged = true;
+            }
+          } else {
+            item.line.mathText = text;
+            item.line.mathSource = 'llm-rescue';
+          }
+          item.rescued = true;
+          stats.rescued += 1;
+        }
+      } catch {
+        // Rescue is best effort: keep the previous fallback on any failure.
+      }
+    });
+  }
+
+  const remainingBlocks = failedBlocks.filter((job) => !job.rescued).length;
+  const remainingLines = failedLines.filter((job) => !job.rescued).length;
+  if (remainingBlocks) {
+    warnings.push(`${remainingBlocks} 段跨行公式未能转写，已保留 PDF 文本层内容。`);
+  }
+  if (remainingLines) {
+    warnings.push(`${remainingLines} 行混排公式未能转写，已保留 PDF 文本层内容。`);
+  }
+
+  return stats;
+}
+
 async function saveTableImage({ table, screenshot, page, outputDir }) {
   const key = String(table.fileKey ?? table.number ?? 0);
   const padded = key.padStart(2, '0');
@@ -468,14 +870,14 @@ async function saveEquationImages({ equations, screenshots, layout, outputDir, w
 
   for (const equation of equations) {
     counter += 1;
-    if (!equation.number) equation.number = counter;
-    const padded = String(equation.number).padStart(2, '0');
+    const padded = equation.fileKey ?? String(counter).padStart(2, '0');
+    const label = equation.number ?? equation.key ?? counter;
     const destination = path.join(equationDir, `equation-${padded}.png`);
     const page = layout.pages.find((candidate) => candidate.pageNumber === equation.pageNumber);
     const screenshot = screenshotForPage(screenshots, equation.pageNumber);
 
     if (!page || !screenshot) {
-      warnings.push(`公式 ${equation.number} 未生成截图，已跳过。`);
+      warnings.push(`公式 ${label} 未生成截图，已跳过。`);
       continue;
     }
 
@@ -499,7 +901,7 @@ async function saveEquationImages({ equations, screenshots, layout, outputDir, w
       equation.width = Math.floor(width);
       equation.height = Math.floor(height);
     } catch (error) {
-      warnings.push(`公式 ${equation.number} 截图裁剪失败：${error.message}`);
+      warnings.push(`公式 ${label} 截图裁剪失败：${error.message}`);
     }
   }
 }
@@ -514,15 +916,20 @@ async function writeTableFiles({ table, outputDir }) {
   const jsonPath = path.join(tableDir, `table-${padded}.json`);
   const caption = table.caption || `Table ${table.number ?? ''}`;
   const markdownLines = [`# ${caption}`, ''];
-  if (table.image) {
-    markdownLines.push(`![${caption}](${path.basename(table.image)})`);
-  } else if (table.headers.length && table.rows.length) {
+  const hasRows = !table.imageOnly && table.headers.length > 0 && table.rows.length > 0;
+  if (hasRows) {
+    // The reconstructed cells win over the crop; the image stays one click away.
     markdownLines.push(markdownTable(table.headers, table.rows));
+    if (table.image) {
+      markdownLines.push('', `[查看表格原图](${path.basename(table.image)})`);
+    }
+  } else if (table.image) {
+    markdownLines.push(`![${caption}](${path.basename(table.image)})`);
   }
   const markdown = markdownLines.join('\n');
 
   await writeFile(markdownPath, `${markdown}\n`, 'utf8');
-  if (!table.imageOnly && table.headers.length && table.rows.length) {
+  if (hasRows) {
     await writeFile(csvPath, `${toCsv([table.headers, ...table.rows])}\n`, 'utf8');
   }
   await writeFile(
@@ -579,7 +986,7 @@ export async function convertPdfToMarkdown(input, options = {}) {
   await mkdir(path.join(outputDir, 'tables'), { recursive: true });
 
   const warnings = [];
-  const totalSteps = 4;
+  const totalSteps = 5;
   const emit = (payload) => {
     if (typeof options.onProgress !== 'function') return;
     try {
@@ -669,11 +1076,22 @@ export async function convertPdfToMarkdown(input, options = {}) {
       refresh: options.formulaLlm?.refresh === true,
       options
     });
+
+    // Numbered equations keep their PDF number; unnumbered display equations
+    // get a stable page-scoped key (`p5-1`) used for crops, caches and reports.
+    const unnumberedCounters = new Map();
     for (const equation of equations) {
-      equation.customLatex =
-        formulaOverrides[equation.number] ??
-        formulaOverrides[String(equation.number)] ??
-        null;
+      if (equation.number !== null && equation.number !== undefined) {
+        equation.key = String(equation.number);
+        equation.fileKey = String(equation.number).padStart(2, '0');
+      } else {
+        const count = (unnumberedCounters.get(equation.pageNumber) ?? 0) + 1;
+        unnumberedCounters.set(equation.pageNumber, count);
+        equation.key = `p${equation.pageNumber}-${count}`;
+        equation.fileKey = equation.key;
+      }
+
+      equation.customLatex = formulaOverrides[equation.key] ?? null;
       equation.latex = resolveFormulaLatex(equation, formulaOverrides);
     }
 
@@ -767,10 +1185,31 @@ export async function convertPdfToMarkdown(input, options = {}) {
     );
 
     const formulaLlm = getFormulaLlmConfig(options.formulaLlm ?? {});
+    const mathLlmConfig = getMathLlmConfig({
+      ...(options.mathLlm ?? {}),
+      baseUrl: options.mathLlm?.baseUrl ?? formulaLlm.baseUrl,
+      apiKey: options.mathLlm?.apiKey ?? formulaLlm.apiKey,
+      model: options.mathLlm?.model ?? formulaLlm.model,
+      concurrency: options.mathLlm?.concurrency ?? formulaLlm.concurrency,
+      timeoutMs: options.mathLlm?.timeoutMs ?? formulaLlm.timeoutMs
+    });
+    let mathLineStats = null;
     await step(
       3,
       '公式 LaTeX',
       async () => {
+        // Prose lines whose text layer mixed in math glyphs are re-typeset by
+        // the vision model before the equation work starts.
+        mathLineStats = await transcribeMangledLines({
+          layout,
+          screenshots,
+          outputDir,
+          config: mathLlmConfig,
+          fetchImpl: options.mathLlm?.fetchImpl ?? options.formulaLlm?.fetchImpl,
+          warnings,
+          emit
+        });
+
         if (!formulaLlm.enabled) return;
         const cachePath = path.join(outputDir, 'formulas.llm.json');
         const refresh = options.formulaLlm?.refresh === true;
@@ -788,10 +1227,14 @@ export async function convertPdfToMarkdown(input, options = {}) {
           if (equation.latex) continue;
 
           if (!refresh) {
-            const cached = llmCache[equation.number];
+            const cached = llmCache[equation.key];
             const reused = cached
               ? resolveFormulaLatex(
-                  { number: equation.number, customLatex: cached },
+                  {
+                    number: equation.number ?? null,
+                    key: equation.key,
+                    customLatex: cached
+                  },
                   {}
                 )
               : null;
@@ -821,7 +1264,7 @@ export async function convertPdfToMarkdown(input, options = {}) {
             const latex = await convertEquationWithLlm(equation, {
               ...formulaLlm,
               fetchImpl: options.formulaLlm?.fetchImpl,
-              onFailure: (reason) => failures.set(equation.number, reason),
+              onFailure: (reason) => failures.set(equation.key, reason),
               imagePath: equation.file
                 ? path.join(outputDir, equation.file)
                 : null
@@ -829,7 +1272,7 @@ export async function convertPdfToMarkdown(input, options = {}) {
             if (latex) {
               equation.latex = latex;
               equation.latexSource = 'llm';
-              llmCache[equation.number] = latex;
+              llmCache[equation.key] = latex;
             }
             completed += 1;
             emit({
@@ -842,7 +1285,55 @@ export async function convertPdfToMarkdown(input, options = {}) {
           }
         );
 
-        for (const [number, reason] of failures) warnings.push(`公式 ${number}：${reason}，已保留原图。`);
+        // Page-level rescue for equations that failed their single-image pass.
+        // Only the failed ids are sent, so successful formulas keep their exact
+        // LaTeX and the normal route never changes.
+        const rescueList = equations.filter(
+          (equation) => !equation.latex && failures.has(equation.key)
+        );
+        if (rescueList.length && formulaLlm.vision) {
+          const byPage = new Map();
+          for (const equation of rescueList) {
+            const list = byPage.get(equation.pageNumber) ?? [];
+            list.push(equation);
+            byPage.set(equation.pageNumber, list);
+          }
+
+          await mapWithConcurrency(
+            [...byPage.values()],
+            formulaLlm.concurrency,
+            async (list) => {
+              const pageNumber = list[0].pageNumber;
+              const screenshot = screenshotForPage(screenshots, pageNumber);
+              if (!screenshot) return;
+              try {
+                const imageBuffer = await sharp(Buffer.from(screenshot.data))
+                  .png()
+                  .toBuffer();
+                const rescued = await rescueEquationsWithLlm({
+                  imageBuffer,
+                  equations: list,
+                  config: formulaLlm,
+                  fetchImpl: options.formulaLlm?.fetchImpl
+                });
+                for (const [key, body] of rescued) {
+                  const equation = list.find((entry) => entry.key === key);
+                  if (!equation) continue;
+                  const latex = finalizeLatex(body, equation.number);
+                  if (!latex) continue;
+                  equation.latex = latex;
+                  equation.latexSource = 'llm-rescue';
+                  llmCache[equation.key] = latex;
+                  failures.delete(equation.key);
+                }
+              } catch {
+                // Rescue is best effort: failed equations keep the image fallback.
+              }
+            }
+          );
+        }
+
+        for (const [key, reason] of failures) warnings.push(`公式 ${key}：${reason}，已保留原图。`);
         if (pending.length > budget.length) warnings.push(`${pending.length - budget.length} 个公式超出模型调用上限，已保留原图。`);
 
         if (Object.keys(llmCache).length) {
@@ -858,17 +1349,35 @@ export async function convertPdfToMarkdown(input, options = {}) {
           (equation) => equation.latex && !equation.latexSource
         ).length;
         const fromModel = equations.filter(
-          (equation) => equation.latexSource === 'llm' && !equation.latexCached
+          (equation) =>
+            (equation.latexSource === 'llm' ||
+              equation.latexSource === 'llm-rescue') &&
+            !equation.latexCached
         ).length;
         const fromCache = equations.filter((equation) => equation.latexCached).length;
         const missing = equations.filter((equation) => !equation.latex).length;
-        if (!equations.length) return '无编号公式';
-        if (!formulaLlm.enabled) {
-          return fromSidecar
-            ? `${fromSidecar} 个来自 sidecar，模型未启用`
-            : '模型未启用，公式使用原图';
-        }
         const parts = [];
+
+        if (mathLineStats && mathLineStats.transcribed + mathLineStats.cached) {
+          parts.push(`行内 ${mathLineStats.transcribed + mathLineStats.cached}`);
+        }
+        if (mathLineStats?.blocks) {
+          parts.push(`跨行 ${mathLineStats.blocks}`);
+        }
+        if (mathLineStats?.rescued) {
+          parts.push(`救援 ${mathLineStats.rescued}`);
+        }
+
+        if (!equations.length) {
+          parts.push('无编号公式');
+          return parts.join(' · ');
+        }
+        if (!formulaLlm.enabled) {
+          parts.push(
+            fromSidecar ? `${fromSidecar} 个来自 sidecar` : '模型未启用，公式使用原图'
+          );
+          return parts.join(' · ');
+        }
         if (fromModel) parts.push(`模型 ${fromModel}`);
         if (fromCache) parts.push(`缓存 ${fromCache}`);
         if (fromSidecar) parts.push(`sidecar ${fromSidecar}`);
@@ -900,16 +1409,16 @@ export async function convertPdfToMarkdown(input, options = {}) {
       previousSources = {};
     }
     for (const equation of equations) {
-      if (!equation.latex || equation.number === null || equation.number === undefined) {
-        continue;
-      }
-      const key = String(equation.number);
+      if (!equation.latex) continue;
+      const key = equation.key ?? String(equation.number);
       resolvedFormulas[key] = equation.latex;
       let origin =
-        equation.latexSource === 'llm'
+        equation.latexSource === 'llm' || equation.latexSource === 'llm-rescue'
           ? equation.latexCached
             ? 'llm-cache'
-            : 'llm'
+            : equation.latexSource === 'llm-rescue'
+              ? 'llm-rescue'
+              : 'llm'
           : equation.customLatex
             ? 'sidecar'
             : 'unknown';
@@ -949,6 +1458,7 @@ export async function convertPdfToMarkdown(input, options = {}) {
     let markdownResult = null;
     let report = null;
     let mainPath = null;
+    let mainZhPath = null;
 
     await step(
       4,
@@ -1022,10 +1532,75 @@ export async function convertPdfToMarkdown(input, options = {}) {
         `${markdownResult.markdown.length.toLocaleString('en-US')} 字符 · 覆盖 ${report.tokenCoverage}%`
     );
 
+    const translateConfig = getTranslateConfig(options.translate ?? {});
+    let translation = null;
+    await step(
+      5,
+      '生成中文版',
+      async () => {
+        mainZhPath = path.join(outputDir, 'main_zh.md');
+        if (!translateConfig.enabled) {
+          // Drop a Chinese copy from an earlier run so the folder never shows a
+          // stale translation next to a regenerated main.md.
+          await rm(mainZhPath, { force: true });
+          return;
+        }
+
+        translation = await translateMarkdown(markdownResult.markdown, {
+          config: translateConfig,
+          fetchImpl: options.translate?.fetchImpl,
+          cachePath: path.join(outputDir, 'translations.json'),
+          onProgress: ({ done, total }) =>
+            emit({
+              index: 5,
+              label: '生成中文版',
+              status: 'progress',
+              progress: { done, total }
+            })
+        });
+
+        if (translation.skipped) {
+          await rm(mainZhPath, { force: true });
+          return;
+        }
+
+        await writeFile(mainZhPath, `${translation.markdown}\n`, 'utf8');
+        report.translation = {
+          model: translateConfig.model,
+          translated: translation.translated,
+          total: translation.total,
+          failed: translation.failed
+        };
+        if (translation.failed) {
+          warnings.push(
+            `${translation.failed} 个片段未能完成翻译，已保留英文原文。`
+          );
+        }
+        // report.json 在步骤 4 写入，翻译统计与警告需要补写一次。
+        await writeFile(
+          path.join(outputDir, 'report.json'),
+          JSON.stringify(report, null, 2),
+          'utf8'
+        );
+      },
+      () => {
+        if (!translateConfig.enabled) return '翻译未启用';
+        if (!translation || translation.skipped) return '未生成（缺少模型配置）';
+        const parts = [
+          `${translation.translated}/${translation.total} 段`,
+          `${translation.markdown.length.toLocaleString('en-US')} 字符`
+        ];
+        if (translation.failed) parts.push(`保留英文 ${translation.failed}`);
+        return parts.join(' · ');
+      }
+    );
+
     return {
       outputDir,
       mainPath,
+      mainZhPath: translation?.skipped === false ? mainZhPath : null,
       markdown: markdownResult.markdown,
+      markdownZh: translation?.skipped === false ? translation.markdown : null,
       metadata,
       report,
       figures,

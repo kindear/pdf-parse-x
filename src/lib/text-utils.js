@@ -83,6 +83,21 @@ export function normalizeInline(text) {
 }
 
 /**
+ * LLM answers and some PDF text layers arrive HTML-escaped (`p &lt; q`), which
+ * breaks KaTeX and reads badly in Markdown. Decode the handful of entities that
+ * can show up in scientific text; `&amp;` goes last so `&amp;lt;` survives.
+ */
+export function decodeHtmlEntities(text) {
+  return String(text ?? '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&');
+}
+
+/**
  * Join positioned PDF.js text items into a readable line. PDF text items often
  * split words, subscripts, punctuation and citations into separate runs, so a
  * plain space join is not sufficient.
@@ -135,7 +150,7 @@ export function joinTextItems(items) {
 
 export function cleanLine(text) {
   return normalizeInline(
-    String(text ?? '')
+    decodeHtmlEntities(String(text ?? ''))
       .replace(/ﬁ/g, 'fi')
       .replace(/ﬂ/g, 'fl')
       .replace(/ﬀ/g, 'ff')
@@ -253,6 +268,118 @@ function latexifyMathText(text) {
   return out.replace(/\s+/g, ' ').trim();
 }
 
+/** Gap between two `$...$` spans that is pure math punctuation, not prose. */
+const MATH_GAP = /^[\s,;:.()[\]{}+\-=<>|/*·−–—′]*$/;
+
+function normalizeMathGap(gap) {
+  const cleaned = gap
+    .replace(/\s*(?:·\s*){2,}·?\s*/g, '\\cdots ')
+    .replace(/[−–—]/g, '-')
+    .replace(/×/g, '\\times ')
+    .replace(/÷/g, '\\div ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // A bare space between two math fragments still needs a separator in LaTeX.
+  return cleaned || (gap.length ? ' ' : '');
+}
+
+function normalizeMathBody(body) {
+  return body
+    .replace(/_\{([^{}]*)\}\s*_\{'\}/g, "_{$1'}")
+    .replace(/_\{'\}/g, "'")
+    .replace(/\s*([=<>])\s*/g, ' $1 ')
+    .replace(/\s+([,;:.])/g, '$1')
+    .replace(/(?<!\\),\s*/g, ', ')
+    .replace(/\]\s*T\b/g, ']^{\\mathsf{T}}')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Clean up the `$...$` spans a text layer produced:
+ *
+ *   - brackets hugging a span are pulled into it, so a vector stays one formula;
+ *   - `]T` is the transpose mark, not a separate letter;
+ *   - spans separated only by math punctuation (`$a$ = $b$`,
+ *     `$u_{1k}$ $,u_{2k}$, · · · $,u_{Ik}$`) are fused into one span so the
+ *     formula renders as a unit instead of a chain of fragments.
+ *
+ * Prose between spans always contains letters, so it is never fused.
+ */
+export function tidyInlineMath(text) {
+  const source = String(text ?? '');
+  if (!source.includes('$')) return source;
+
+  const expanded = source
+    .replace(/([([{])(\s*)\$([^$\n]+)\$/g, (whole, bracket, space, body) =>
+      space ? `$${bracket}${body}$` : whole
+    )
+    .replace(/\$([^$\n]+)\$(\s*)([\])}])/g, (whole, body, space, bracket) =>
+      space ? `$${body}${bracket}$` : whole
+    );
+
+  const spans = [];
+  const pattern = /\$([^$\n]+)\$/g;
+  let match;
+  while ((match = pattern.exec(expanded))) {
+    spans.push({ start: match.index, end: match.index + match[0].length, body: match[1] });
+  }
+
+  let output = expanded;
+  if (spans.length >= 2) {
+    let result = expanded.slice(0, spans[0].start);
+    let body = spans[0].body;
+    let cursor = spans[0].end;
+
+    for (const span of spans.slice(1)) {
+      const gap = expanded.slice(cursor, span.start);
+      if (gap.length <= 16 && MATH_GAP.test(gap)) {
+        body += normalizeMathGap(gap) + span.body;
+        cursor = span.end;
+        continue;
+      }
+      result += `$${normalizeMathBody(body)}$${gap}`;
+      body = span.body;
+      cursor = span.end;
+    }
+
+    output = `${result}$${normalizeMathBody(body)}$${expanded.slice(cursor)}`;
+  }
+
+  return output
+    .replace(/\$([^$\n]+)\$/g, (whole, body) => `$${normalizeMathBody(body)}$`)
+    .replace(/(\$[^$\n]*\[[^$\n]*\])\$\s*T\b/g, '$1^{\\mathsf{T}}$');
+}
+
+/**
+ * Drop the split-fraction residue the text layer leaves in front of a line
+ * (`− $1_{2}$ − $1_{2}$ so the terms …`). Only sequences built from the
+ * `1_{2}` artifact and minus signs are removed.
+ */
+const MATH_RESIDUE_UNIT = /^\s*[−\-–—]?\s*\$?1_\{2\}\$?/;
+
+export function stripMathResiduePrefix(text) {
+  let value = String(text ?? '');
+  // `1/2 1/2 words …` is the same artifact with slash-style fractions.
+  value = value.replace(/^(?:\s*1\/2\s*){2,}/, '');
+  while (MATH_RESIDUE_UNIT.test(value)) value = value.replace(MATH_RESIDUE_UNIT, '');
+  return value.replace(/^[\s−\-–—,]+/, '');
+}
+
+/** `k = 1, 2, · · ·, K` written in prose is an inline math list. */
+const MATH_LIST = /\b([A-Za-z])\s*=\s*1\s*,\s*2\s*,\s*(?:·\s*){2,}·?\s*,?\s*([A-Z])\b/g;
+
+export function wrapInlineMathLists(text) {
+  return String(text ?? '')
+    .split(/(\$[^$\n]+\$)/)
+    .map((part, index) =>
+      index % 2 === 1 ? part : part.replace(MATH_LIST, (_, start, end) =>
+        `$${start} = 1, 2, \\cdots, ${end}$`
+      )
+    )
+    .join('');
+}
+
 /**
  * Rebuild a line so inline math gets `$...$` delimiters.
  *
@@ -364,7 +491,7 @@ export function renderInlineMath(items, mainHeight) {
     .trim();
 
   if (!rendered.includes('$') || rendered.length > 500) return null;
-  return rendered;
+  return tidyInlineMath(rendered);
 }
 
 function mathSegmentToLatex(items, mainHeight) {
@@ -774,9 +901,14 @@ export function escapeMarkdownCell(value) {
 }
 
 export function escapeMarkdownText(value) {
+  // Angle brackets are escaped so prose cannot inject HTML, but inside `$...$`
+  // they are math relations and must reach KaTeX untouched.
   return String(value ?? '')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .split(/(\$[^$\n]+\$)/)
+    .map((part, index) =>
+      index % 2 === 1 ? part : part.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    )
+    .join('');
 }
 
 export function markdownTable(headers, rows) {

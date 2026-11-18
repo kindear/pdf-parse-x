@@ -68,8 +68,15 @@ function equationPrompt(equation) {
     'If the equation spans several lines, separate the rows with \\\\ inside a single \\begin{aligned}...\\end{aligned} block.',
     'Preserve fractions, roots, summations, integrals, subscripts, superscripts, Greek symbols, primes, accents and punctuation.',
     'Use \\left( \\right), \\frac, \\sum, \\prod, \\int, \\partial, \\nabla and \\mathrm for upright multi-letter names.',
+    'Subscripts that contain a sign are braced individually: write p_{i+} and p_{+j}.',
+    'Two margin symbols multiplied stay a product: \\sqrt{p_{i+}p_{+j}}, never p_{i+p+j} or p_i + p_j.',
+    'Keep every sum, product and integral limit, including limits printed on the line below the symbol (\\sum_{i}\\sum_{j}, \\sum_{k=1}^{K}).',
     'Never invent content that is not visible in the image.',
-    `Equation number in the PDF: (${equation.number}).`,
+    `Equation number in the PDF: ${
+      equation.number === null || equation.number === undefined
+        ? '(none, unnumbered display equation)'
+        : `(${equation.number})`
+    }.`,
     rawText ? `Noisy PDF text layer for reference only: ${rawText}` : ''
   ]
     .filter(Boolean)
@@ -82,6 +89,13 @@ function mimeTypeFor(filePath) {
   if (extension === '.webp') return 'image/webp';
   return 'image/png';
 }
+
+/** `p_{i+p+j}` shows two marginal totals were fused into one subscript. */
+const SUSPICIOUS_SUBSCRIPT = /_\{[^}]*[A-Za-z]\+[A-Za-z]\+[A-Za-z][^}]*\}/;
+/** `p_{i+}-p_{+j}` reads two multiplied margins as a subtraction. */
+const SUSPICIOUS_MARGIN_MINUS = /p_\{i\+\}\s*[-−]\s*p_\{\+j\}/;
+const RETRY_HINT =
+  'Retry: the previous answer merged marginal totals. Write each margin as its own braced subscript and multiply them, e.g. \\frac{p_{ij}-p_{i+}p_{+j}}{\\sqrt{p_{i+}p_{+j}}} (not p_{i+p+j} and not p_i + p_j).';
 
 export async function convertEquationWithLlm(equation, options = {}) {
   const config = getFormulaLlmConfig(options);
@@ -112,44 +126,59 @@ export async function convertEquationWithLlm(equation, options = {}) {
     }
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  const requestOnce = async (promptText) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+    try {
+      const parts = [{ type: 'text', text: promptText }, ...content.slice(1)];
+      const response = await fetchImpl(`${config.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(config.apiKey
+            ? { authorization: `Bearer ${config.apiKey}` }
+            : {})
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: config.model,
+          temperature: config.temperature,
+          messages: [
+            {
+              role: 'user',
+              content: parts.length > 1 ? parts : parts[0].text
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        options.onFailure?.(`模型服务返回 HTTP ${response.status}`);
+        return null;
+      }
+      const payload = await response.json();
+      const body = firstString(payload?.choices?.[0]?.message?.content);
+      if (!body) {
+        options.onFailure?.('模型返回空内容');
+        return null;
+      }
+      return body;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   try {
-    const response = await fetchImpl(`${config.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(config.apiKey
-          ? { authorization: `Bearer ${config.apiKey}` }
-          : {})
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: config.model,
-        temperature: config.temperature,
-        messages: [
-          {
-            role: 'user',
-            content:
-              content.length > 1
-                ? content
-                : content[0].text
-          }
-        ]
-      })
-    });
+    let body = await requestOnce(prompt);
+    if (!body) return null;
 
-    if (!response.ok) {
-      options.onFailure?.(`模型服务返回 HTTP ${response.status}`);
-      return null;
-    }
-    const payload = await response.json();
-    const message = payload?.choices?.[0]?.message?.content;
-    const body = firstString(message);
-    if (!body) {
-      options.onFailure?.('模型返回空内容');
-      return null;
+    // Fused marginal totals are a known vision failure mode; one focused retry
+    // fixes most of them without paying for a second pass on clean output.
+    if (SUSPICIOUS_SUBSCRIPT.test(body) || SUSPICIOUS_MARGIN_MINUS.test(body)) {
+      const retried = await requestOnce(`${prompt}\n${RETRY_HINT}`);
+      if (retried && !SUSPICIOUS_SUBSCRIPT.test(retried) && !SUSPICIOUS_MARGIN_MINUS.test(retried)) {
+        body = retried;
+      }
     }
 
     const latex = finalizeLatex(body, equation.number);
@@ -158,8 +187,6 @@ export async function convertEquationWithLlm(equation, options = {}) {
   } catch (error) {
     options.onFailure?.(error.name === 'AbortError' ? '模型请求超时' : `模型请求失败${error.cause?.code ? ` (${error.cause.code})` : ''}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -167,6 +194,116 @@ export async function convertEquationWithLlm(equation, options = {}) {
  * Resolve equations with a bounded worker pool so large papers do not issue
  * dozens of concurrent requests. `resolve` must return a value or null.
  */
+const RESCUE_PROMPT = [
+  'You are given one PDF page image that contains several display equations.',
+  'Transcribe only the equations listed below, in the same order.',
+  'Rules:',
+  '- Return only JSON: {"items":[{"id":"<id>","latex":"<body>"}]}.',
+  '- `latex` is the expression body only: no $$ delimiters, no \\tag, no equation number.',
+  '- Keep fractions, roots, sum limits, subscripts, superscripts and Greek symbols as printed.',
+  '- If an equation is not visible, return an empty `latex` string for that id.'
+].join('\n');
+
+/** Parse `{"items":[{"id":..,"latex":..}]}` into a Map keyed by id. */
+export function parseRescueResponse(text) {
+  const cleaned = String(text ?? '')
+    .replace(/^\s*```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/, '')
+    .trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  const result = new Map();
+  if (start < 0 || end <= start) return result;
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(cleaned.slice(start, end + 1));
+  } catch {
+    return result;
+  }
+  const list = Array.isArray(parsed) ? parsed : parsed?.items;
+  if (!Array.isArray(list)) return result;
+
+  for (const entry of list) {
+    const id = entry?.id;
+    const latex = entry?.latex ?? entry?.text;
+    if ((typeof id === 'string' || typeof id === 'number') && typeof latex === 'string') {
+      result.set(String(id), latex);
+    }
+  }
+  return result;
+}
+
+/**
+ * Second chance for equations that failed the single-image pass: send the whole
+ * page once and ask for the listed equations only. Successful equations never
+ * take this path, so quality of the normal route is unchanged.
+ */
+export async function rescueEquationsWithLlm({
+  imageBuffer,
+  equations,
+  config,
+  fetchImpl
+}) {
+  const request = fetchImpl ?? globalThis.fetch;
+  if (!config?.enabled || !config.baseUrl || typeof request !== 'function') return new Map();
+  if (!imageBuffer?.length || !equations?.length) return new Map();
+
+  const list = equations
+    .map(
+      (equation) =>
+        `- id: ${JSON.stringify(String(equation.key))}${
+          equation.number === null || equation.number === undefined
+            ? ' (unnumbered)'
+            : ` (numbered (${equation.number}))`
+        }`
+    )
+    .join('\n');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await request(`${config.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {})
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: config.model,
+        temperature: config.temperature,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `${RESCUE_PROMPT}\nEquations:\n${list}` },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: `data:image/png;base64,${imageBuffer.toString('base64')}`
+                }
+              }
+            ]
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) return new Map();
+    const payload = await response.json();
+    const content = payload?.choices?.[0]?.message?.content;
+    const text = Array.isArray(content)
+      ? content.map((part) => (typeof part === 'string' ? part : part?.text ?? '')).join('')
+      : String(content ?? '');
+    return parseRescueResponse(text);
+  } catch {
+    return new Map();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function mapWithConcurrency(items, limit, worker) {
   const results = new Array(items.length).fill(null);
   if (!items.length) return results;

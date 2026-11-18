@@ -391,6 +391,36 @@ a:hover {
   color: #052321;
 }
 
+.lang-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.lang-option {
+  padding: 5px 10px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.lang-option:hover {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.lang-option.is-active {
+  background: var(--ink);
+  color: #fff;
+}
+
 #toggleSidebar {
   display: none;
 }
@@ -463,6 +493,34 @@ a:hover {
   text-decoration: underline;
   text-decoration-color: rgba(11, 127, 122, 0.35);
   text-underline-offset: 3px;
+}
+
+/* `[查看表格原图](table-05.png)` is a control, not prose: render it as a pill
+   button so the spreadsheet/image swap is obvious. */
+.markdown-body a[href$=".png"],
+.markdown-body a[href$=".jpg"],
+.markdown-body a[href$=".jpeg"],
+.markdown-body a[href$=".webp"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 4px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #f5f8fb;
+  color: #21405c;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.markdown-body a[href$=".png"]:hover,
+.markdown-body a[href$=".jpg"]:hover,
+.markdown-body a[href$=".jpeg"]:hover,
+.markdown-body a[href$=".webp"]:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .markdown-body ul,
@@ -569,10 +627,13 @@ a:hover {
 }
 
 .math-display {
+  display: flex;
+  justify-content: safe center;
+  align-items: center;
   margin: 24px 0 18px;
   padding: 2px 0;
   overflow-x: auto;
-  text-align: center;
+  overflow-y: hidden;
 }
 
 .math-inline {
@@ -588,6 +649,15 @@ a:hover {
 .math-display annotation,
 .math-row annotation {
   display: none;
+}
+
+/* MathML inherits the page font unless a math font is requested, which makes
+   `\mathrm{PPMI}` and `\max` render in Segoe UI (upright sans-serif). Ask for a
+   real math face first so variables stay italic and names stay serif roman. */
+math {
+  font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math",
+    "DejaVu Math TeX Gyre", "TeX Gyre Termes Math", "Times New Roman", serif;
+  font-variant-numeric: lining-nums;
 }
 
 .math-inline math {
@@ -606,10 +676,11 @@ a:hover {
   text-align: center;
 }
 
+/* `text-align: center` does not move a MathML block, so the formula is a flex
+   item that shrinks to its own width and gets centred by the container. */
 .math-display math {
-  display: block;
-  width: 100%;
-  margin: 0 auto;
+  display: inline-block;
+  flex: 0 0 auto;
   font-size: 1.12em;
 }
 
