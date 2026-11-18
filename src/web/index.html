@@ -103,6 +103,69 @@
       </div>
     </section>
 
+    <section class="workspace developer-section" id="developer">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Developers</p>
+          <h2>接入与接口</h2>
+        </div>
+      </div>
+
+      <div class="developer-grid">
+        <article class="developer-card">
+          <div class="developer-card-head">
+            <h3>MCP 服务</h3>
+            <span class="dev-chip">stdio · http</span>
+          </div>
+          <p>本地 stdio 或远程 HTTP 均可接入；路径与地址按当前项目生成。</p>
+
+          <div class="mcp-targets" id="mcpModes" role="group" aria-label="MCP 传输方式">
+            <button class="chip-tab is-active" type="button" data-mcp-mode="http">远程 HTTP</button>
+            <button class="chip-tab" type="button" data-mcp-mode="stdio">本地 stdio</button>
+          </div>
+
+          <div class="mcp-url-row" id="mcpUrlRow">
+            <code id="mcpUrl">http://localhost:3000/mcp</code>
+            <button class="button ghost" id="copyMcpUrlButton" type="button">复制 URL</button>
+          </div>
+
+          <pre class="code-block" id="mcpConfig">正在读取 MCP 配置…</pre>
+
+          <p class="mcp-note" id="mcpAuthNote" hidden>已启用访问令牌，请将配置中的 &lt;MCP_HTTP_TOKEN&gt; 替换为实际值。</p>
+          <p class="mcp-note mcp-hint">VS Code 可直接使用仓库内的 <code>.vscode/mcp.json</code>。</p>
+
+          <div class="developer-actions">
+            <button class="button primary" id="copyMcpButton" type="button">复制配置</button>
+            <span class="copy-hint" id="copyHint" aria-live="polite"></span>
+          </div>
+        </article>
+
+        <article class="developer-card">
+          <div class="developer-card-head">
+            <h3>REST API</h3>
+            <div class="developer-card-tools">
+              <a class="button ghost" href="/api/openapi.json" download="openapi.json">下载 openapi.json</a>
+              <span class="dev-chip" id="apiCount">读取中…</span>
+            </div>
+          </div>
+          <p>所有文档接口只使用路径参数；上传与翻译支持可选字段。</p>
+
+          <div class="api-table-wrap" id="apiTableWrap">
+            <table class="api-table">
+              <thead>
+                <tr>
+                  <th scope="col">方法</th>
+                  <th scope="col">路径</th>
+                  <th scope="col">说明</th>
+                </tr>
+              </thead>
+              <tbody id="apiTableBody"></tbody>
+            </table>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <section class="feature-strip">
       <article>
         <span class="feature-number">01</span>

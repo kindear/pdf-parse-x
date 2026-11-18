@@ -1,27 +1,42 @@
 import 'dotenv/config';
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import multer from 'multer';
-import { convertPdfToMarkdown } from './lib/pdf-parser.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createMcpServer } from './mcp.js';
+import {
+  convertPdf,
+  convertSample,
+  documentDirectory,
+  documentResources,
+  getDocument,
+  getDocumentRecord,
+  listDocuments,
+  outputRoot,
+  projectRoot,
+  readDocumentFormulas,
+  readDocumentMarkdown,
+  readJson,
+  removeDocument,
+  translateDocument
+} from './lib/document-service.js';
 import { buildPreviewHtml, collectResources } from './lib/preview.js';
 import { createConsoleProgress } from './lib/progress.js';
-import { getTranslateConfig, translateOutputDir } from './lib/translate.js';
-import { safeOutputName } from './lib/text-utils.js';
+import { API_ENDPOINTS } from './lib/api-catalog.js';
+import { buildOpenApi } from './lib/openapi.js';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(currentDir, '..');
 const webRoot = path.join(currentDir, 'web');
-const outputRoot = path.join(projectRoot, 'output');
-const samplePdfName = process.env.SAMPLE_PDF ?? 'software-05-00038.pdf';
-const samplePdf = path.isAbsolute(samplePdfName)
-  ? samplePdfName
-  : [path.join(projectRoot, 'pdfs', samplePdfName), path.join(projectRoot, samplePdfName)].find(
-      (candidate) => existsSync(candidate)
-    ) ?? path.join(projectRoot, samplePdfName);
 const port = Number(process.env.PORT ?? 3000);
+const packageInfo = await readJson(path.join(projectRoot, 'package.json'), {});
+const mcpServerConfig = {
+  command: 'node',
+  args: [path.join(projectRoot, 'src', 'mcp.js')],
+  cwd: projectRoot
+};
 
 await mkdir(outputRoot, { recursive: true });
 
@@ -41,31 +56,6 @@ const upload = multer({
     callback(null, true);
   }
 });
-
-function validJobId(value) {
-  // Dots are allowed so ids such as `2102.08942v1` stay addressable; `..` is
-  // still rejected explicitly and `jobDir` re-checks the resolved path.
-  return (
-    typeof value === 'string' &&
-    /^[a-z0-9][a-z0-9._-]{0,120}$/i.test(value) &&
-    !value.includes('..')
-  );
-}
-
-function jobDir(jobId) {
-  if (!validJobId(jobId)) return null;
-  const resolved = path.resolve(outputRoot, jobId);
-  if (!resolved.startsWith(`${outputRoot}${path.sep}`)) return null;
-  return resolved;
-}
-
-async function readJson(filePath, fallback = null) {
-  try {
-    return JSON.parse(await readFile(filePath, 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
 
 // --- live conversion progress -------------------------------------------------
 
@@ -149,53 +139,52 @@ function wantsTranslate(value) {
   return value === true || value === 'true' || value === '1' || value === 1;
 }
 
-async function listDocuments() {
-  const entries = await readdir(outputRoot, { withFileTypes: true });
-  const documents = [];
+function translateFlag(value) {
+  return value === undefined ? undefined : wantsTranslate(value);
+}
 
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !validJobId(entry.name)) continue;
-    const directory = path.join(outputRoot, entry.name);
-    const [metadata, report] = await Promise.all([
-      readJson(path.join(directory, 'metadata.json')),
-      readJson(path.join(directory, 'report.json'))
-    ]);
-    if (!metadata && !report) continue;
+function requestBaseUrl(request) {
+  const forwardedProto = request.get('x-forwarded-proto')?.split(',')[0].trim();
+  const forwardedHost = request.get('x-forwarded-host')?.split(',')[0].trim();
+  return `${forwardedProto || request.protocol}://${forwardedHost || request.get('host')}`;
+}
 
-    let generatedAt = metadata?.generatedAt ?? report?.generatedAt ?? null;
-    if (!generatedAt) {
-      try {
-        generatedAt = (await stat(path.join(directory, 'main.md'))).mtime.toISOString();
-      } catch {
-        generatedAt = null;
-      }
+function mcpHttpAuthorized(request) {
+  const token = process.env.MCP_HTTP_TOKEN;
+  if (!token) return true;
+  return request.get('authorization') === `Bearer ${token}`;
+}
+
+async function handleConvert(request, response, next) {
+  try {
+    if (!request.file) {
+      response.status(400).json({ error: '请选择一个 PDF 文件。' });
+      return;
     }
 
-    const hasChinese = await stat(path.join(directory, 'main_zh.md'))
-      .then(() => true)
-      .catch(() => false);
+    const progressId = validProgressId(request.body?.progressId)
+      ? request.body.progressId
+      : null;
+    let result;
+    try {
+      result = await convertPdf(request.file.buffer, {
+        sourceName: request.file.originalname,
+        translate: translateFlag(request.body?.translate),
+        onProgress: progressHandler(progressId)
+      });
+    } catch (error) {
+      finishProgress(progressId, { ok: false, error: error.message });
+      throw error;
+    }
 
-    documents.push({
-      id: entry.name,
-      title: metadata?.title ?? report?.title ?? entry.name,
-      sourceFile: metadata?.sourceFile ?? `${entry.name}.pdf`,
-      pages: report?.pages ?? 0,
-      figures: report?.figures ?? 0,
-      tables: report?.tables ?? 0,
-      equations: report?.equations ?? 0,
-      coverage: report?.tokenCoverage ?? null,
-      hasChinese,
-      generatedAt,
-      previewUrl: `/preview/${encodeURIComponent(entry.name)}`,
-      chinesePreviewUrl: hasChinese
-        ? `/preview/${encodeURIComponent(entry.name)}?lang=zh`
-        : null,
-      markdownUrl: `/output/${encodeURIComponent(entry.name)}/main.md`,
-      reportUrl: `/output/${encodeURIComponent(entry.name)}/report.json`
-    });
+    finishProgress(progressId, { ok: true, id: result.id });
+    response
+      .status(201)
+      .location(`/api/documents/${encodeURIComponent(result.id)}`)
+      .json(result);
+  } catch (error) {
+    next(error);
   }
-
-  return documents.sort((a, b) => String(b.generatedAt).localeCompare(String(a.generatedAt)));
 }
 
 app.get('/api/documents', async (_request, response, next) => {
@@ -206,204 +195,225 @@ app.get('/api/documents', async (_request, response, next) => {
   }
 });
 
+app.get('/api/openapi.json', (request, response) => {
+  response.set('Cache-Control', 'no-store');
+  response.json(
+    buildOpenApi({
+      baseUrl: requestBaseUrl(request),
+      version: packageInfo.version ?? '1.0.0',
+      mcpAuthRequired: Boolean(process.env.MCP_HTTP_TOKEN)
+    })
+  );
+});
+
+app.get('/api/meta', (request, response) => {
+  const httpUrl = `${requestBaseUrl(request)}/mcp`;
+  const authRequired = Boolean(process.env.MCP_HTTP_TOKEN);
+  const httpHeaders = authRequired
+    ? { headers: { Authorization: 'Bearer <MCP_HTTP_TOKEN>' } }
+    : {};
+  const stdio = {
+    ...mcpServerConfig,
+    vscode: {
+      servers: { 'pdf-parse-x': { type: 'stdio', ...mcpServerConfig } }
+    },
+    generic: {
+      mcpServers: {
+        'pdf-parse-x': {
+          command: mcpServerConfig.command,
+          args: mcpServerConfig.args
+        }
+      }
+    }
+  };
+  const http = {
+    url: httpUrl,
+    authRequired,
+    vscode: {
+      servers: { 'pdf-parse-x': { type: 'http', url: httpUrl, ...httpHeaders } }
+    },
+    generic: {
+      mcpServers: { 'pdf-parse-x': { url: httpUrl, ...httpHeaders } }
+    }
+  };
+
+  response.json({
+    name: 'pdf-parse-x',
+    version: packageInfo.version ?? '1.0.0',
+    mcp: {
+      ...mcpServerConfig,
+      ...stdio,
+      stdio,
+      http
+    },
+    endpoints: API_ENDPOINTS
+  });
+});
+
+app.post('/api/documents', upload.single('pdf'), handleConvert);
+app.post('/api/convert', upload.single('pdf'), handleConvert);
+
 app.get('/api/documents/:id', async (request, response, next) => {
   try {
-    const directory = jobDir(request.params.id);
-    if (!directory) {
-      response.status(400).json({ error: '无效的文档 ID。' });
-      return;
-    }
-    const [metadata, report] = await Promise.all([
-      readJson(path.join(directory, 'metadata.json')),
-      readJson(path.join(directory, 'report.json'))
-    ]);
-    if (!metadata && !report) {
-      response.status(404).json({ error: '文档不存在。' });
-      return;
-    }
-    response.json({ metadata, report });
+    response.json(await getDocument(request.params.id));
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/convert', upload.single('pdf'), async (request, response, next) => {
+app.get('/api/documents/:id/markdown', async (request, response, next) => {
   try {
-    if (!request.file) {
-      response.status(400).json({ error: '请选择一个 PDF 文件。' });
-      return;
-    }
+    const lang = typeof request.query.lang === 'string' ? request.query.lang : 'en';
+    const { markdown } = await readDocumentMarkdown(request.params.id, lang);
+    response.type('text/markdown').send(markdown);
+  } catch (error) {
+    next(error);
+  }
+});
 
-    const base = safeOutputName(
-      path.basename(request.file.originalname, path.extname(request.file.originalname))
-    );
-    const jobId = `${base}-${Date.now().toString(36)}`;
-    const outputDir = path.join(outputRoot, jobId);
-    const progressId = validProgressId(request.body?.progressId)
-      ? request.body.progressId
-      : null;
-    const wantsTranslation = wantsTranslate(request.body?.translate);
+app.get('/api/documents/:id/metadata', async (request, response, next) => {
+  try {
+    const document = await getDocumentRecord(request.params.id);
+    response.json(document.metadata);
+  } catch (error) {
+    next(error);
+  }
+});
 
-    let result;
-    try {
-      result = await convertPdfToMarkdown(request.file.buffer, {
-        sourceName: request.file.originalname,
-        outputDir,
-        translate: wantsTranslation ? { enabled: true } : undefined,
-        onProgress: progressHandler(progressId)
-      });
-    } catch (error) {
-      finishProgress(progressId, { ok: false, error: error.message });
-      throw error;
-    }
-    finishProgress(progressId, { ok: true, id: jobId });
+app.get('/api/documents/:id/report', async (request, response, next) => {
+  try {
+    const document = await getDocumentRecord(request.params.id);
+    response.json(document.report);
+  } catch (error) {
+    next(error);
+  }
+});
 
+app.get('/api/documents/:id/formulas', async (request, response, next) => {
+  try {
+    response.json(await readDocumentFormulas(request.params.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/documents/:id/resources', async (request, response, next) => {
+  try {
+    const resources = await documentResources(request.params.id);
+    response.json({ id: request.params.id, ...resources });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/documents/:id/translation', async (request, response, next) => {
+  try {
+    const document = await getDocumentRecord(request.params.id);
     response.json({
-      id: jobId,
-      title: result.metadata.title,
-      hasChinese: Boolean(result.mainZhPath),
-      previewUrl: `/preview/${encodeURIComponent(jobId)}`,
-      chinesePreviewUrl: result.mainZhPath
-        ? `/preview/${encodeURIComponent(jobId)}?lang=zh`
-        : null,
-      markdownUrl: `/output/${encodeURIComponent(jobId)}/main.md`,
-      reportUrl: `/output/${encodeURIComponent(jobId)}/report.json`,
-      report: result.report
+      id: document.id,
+      hasChinese: document.hasChinese,
+      translation: document.report?.translation ?? null,
+      chinesePreviewUrl: document.chinesePreviewUrl,
+      chineseMarkdownUrl: document.chineseMarkdownUrl
     });
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/convert-sample', async (request, response, next) => {
+async function handleSampleConversion(request, response, next) {
   try {
-    if (!existsSync(samplePdf)) {
-      response.status(404).json({ error: '工作区中没有找到示例 PDF。' });
-      return;
-    }
-
-    const jobId = safeOutputName(
-      path.basename(samplePdf, path.extname(samplePdf))
-    );
-    const outputDir = path.join(outputRoot, jobId);
     const progressId = validProgressId(request.body?.progressId)
       ? request.body.progressId
       : null;
-    const wantsTranslation = wantsTranslate(request.body?.translate);
-
     let result;
     try {
-      result = await convertPdfToMarkdown(samplePdf, {
-        outputDir,
-        translate: wantsTranslation ? { enabled: true } : undefined,
+      result = await convertSample({
+        translate: translateFlag(request.body?.translate),
         onProgress: progressHandler(progressId)
       });
     } catch (error) {
       finishProgress(progressId, { ok: false, error: error.message });
       throw error;
     }
-    finishProgress(progressId, { ok: true, id: jobId });
 
-    response.json({
-      id: jobId,
-      title: result.metadata.title,
-      hasChinese: Boolean(result.mainZhPath),
-      previewUrl: `/preview/${encodeURIComponent(jobId)}`,
-      chinesePreviewUrl: result.mainZhPath
-        ? `/preview/${encodeURIComponent(jobId)}?lang=zh`
-        : null,
-      markdownUrl: `/output/${encodeURIComponent(jobId)}/main.md`,
-      reportUrl: `/output/${encodeURIComponent(jobId)}/report.json`,
-      report: result.report
-    });
+    finishProgress(progressId, { ok: true, id: result.id });
+    response
+      .status(201)
+      .location(`/api/documents/${encodeURIComponent(result.id)}`)
+      .json(result);
   } catch (error) {
     next(error);
   }
-});
+}
 
-app.post('/api/documents/:id/translate', async (request, response, next) => {
+app.post('/api/documents/sample', handleSampleConversion);
+app.post('/api/convert-sample', handleSampleConversion);
+
+async function handleTranslation(request, response, next) {
+  const progressId = validProgressId(request.body?.progressId)
+    ? request.body.progressId
+    : null;
+  const logStep = createConsoleProgress();
+  const startedAt = Date.now();
+  const emit = (status, extra = {}) => {
+    const event = { index: 1, total: 1, label: '生成中文版', status, ...extra };
+    logStep(event);
+    if (progressId) broadcastProgress(progressId, event);
+  };
+
   try {
-    const directory = jobDir(request.params.id);
-    if (!directory) {
-      response.status(400).json({ error: '无效的文档 ID。' });
-      return;
-    }
-
-    const config = getTranslateConfig({ enabled: true });
-    if (!config.enabled || !config.baseUrl) {
-      response.status(400).json({
-        error: '模型未配置，无法生成中文版（请设置 LLM_BASE_URL / LLM_API_KEY）。'
-      });
-      return;
-    }
-
-    const progressId = validProgressId(request.body?.progressId)
-      ? request.body.progressId
-      : null;
-    const logStep = createConsoleProgress();
-    const startedAt = Date.now();
-    const emit = (status, extra = {}) => {
-      const event = { index: 1, total: 1, label: '生成中文版', status, ...extra };
-      logStep(event);
-      if (progressId) broadcastProgress(progressId, event);
-    };
-
     emit('start');
-    const result = await translateOutputDir({
-      directory,
-      config,
+    const result = await translateDocument(request.params.id, {
       onProgress: ({ done, total }) => emit('progress', { progress: { done, total } })
     });
 
-    if (!result.ok) {
-      emit('error', { durationMs: Date.now() - startedAt, detail: result.error });
-      finishProgress(progressId, { ok: false, error: result.error });
-      response.status(400).json({ error: result.error });
-      return;
-    }
-
     emit('done', {
       durationMs: Date.now() - startedAt,
-      detail: `${result.translated}/${result.total} 段 · ${result.markdown.length.toLocaleString('en-US')} 字符`
+      detail: `${result.translated}/${result.total} 段`
     });
-    finishProgress(progressId, { ok: true, id: request.params.id });
+    finishProgress(progressId, { ok: true, id: result.id });
+    response.json(result);
+  } catch (error) {
+    emit('error', { durationMs: Date.now() - startedAt, detail: error.message });
+    finishProgress(progressId, { ok: false, error: error.message });
+    next(error);
+  }
+}
 
-    response.json({
-      ok: true,
-      id: request.params.id,
-      translated: result.translated,
-      total: result.total,
-      failed: result.failed,
-      chinesePreviewUrl: `/preview/${encodeURIComponent(request.params.id)}?lang=zh`
-    });
+app.put('/api/documents/:id/translation', handleTranslation);
+app.post('/api/documents/:id/translate', handleTranslation);
+
+app.delete('/api/documents/:id', async (request, response, next) => {
+  try {
+    response.json(await removeDocument(request.params.id));
   } catch (error) {
     next(error);
   }
 });
 
-app.delete('/api/documents/:id', async (request, response, next) => {
+app.get('/translate/:id', (request, response) => {
+  const id = request.params.id;
+  let directory;
   try {
-    const directory = jobDir(request.params.id);
-    if (!directory) {
-      response.status(400).json({ error: '无效的文档 ID。' });
-      return;
-    }
-    await rm(directory, { recursive: true, force: true });
-    response.json({ ok: true });
-  } catch (error) {
-    next(error);
+    directory = documentDirectory(id);
+  } catch {
+    response.status(400).send('无效的文档 ID。');
+    return;
   }
+  if (!existsSync(path.join(directory, 'main.md')) && !existsSync(path.join(directory, 'main_zh.md'))) {
+    response.status(404).send('文档不存在。');
+    return;
+  }
+  // The page runs the translation in its own tab and then jumps to the preview.
+  response.set('Cache-Control', 'no-store');
+  response.sendFile(path.join(webRoot, 'translate.html'));
 });
 
 app.get('/preview/:id', async (request, response, next) => {
   try {
     const id = request.params.id;
-    if (!validJobId(id)) {
-      response.status(400).send('无效的文档 ID。');
-      return;
-    }
-
-    const directory = jobDir(id);
+    const directory = documentDirectory(id);
     const [markdown, chineseMarkdown] = await Promise.all([
       readFile(path.join(directory, 'main.md'), 'utf8').catch(() => null),
       readFile(path.join(directory, 'main_zh.md'), 'utf8').catch(() => null)
@@ -451,19 +461,71 @@ app.get('/preview/:id', async (request, response, next) => {
   }
 });
 
+app.use('/mcp', (request, response, next) => {
+  response.set({
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers':
+      'content-type, mcp-session-id, mcp-protocol-version, last-event-id, authorization',
+    'Access-Control-Expose-Headers': 'mcp-session-id'
+  });
+  if (request.method === 'OPTIONS') {
+    response.sendStatus(204);
+    return;
+  }
+  next();
+});
+
+app.all('/mcp', async (request, response, next) => {
+  if (!mcpHttpAuthorized(request)) {
+    response.status(401).json({ error: 'MCP HTTP 访问令牌无效。' });
+    return;
+  }
+
+  let server;
+  let transport;
+  let closed = false;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    transport?.close().catch(() => {});
+    server?.close().catch(() => {});
+  };
+
+  try {
+    server = createMcpServer();
+    transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    response.on('close', cleanup);
+    await server.connect(transport);
+    await transport.handleRequest(request, response, request.body);
+  } catch (error) {
+    cleanup();
+    if (!response.headersSent) next(error);
+    else response.end();
+  }
+});
+
 app.use('/output', express.static(outputRoot, { index: false }));
 app.use(express.static(webRoot, { extensions: ['html'] }));
 
 app.use((error, _request, response, _next) => {
-  const status = error instanceof multer.MulterError ? 400 : 500;
+  const isUploadError =
+    error instanceof multer.MulterError || error.message === '只支持 PDF 文件。';
+  const status = isUploadError ? 400 : error.status ?? 500;
   const message =
     error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
       ? '文件超过 100 MB 限制。'
       : error.message || '服务器处理失败。';
-  console.error(error);
+  if (status >= 500) console.error(error);
   response.status(status).json({ error: message });
 });
 
-app.listen(port, () => {
-  console.log(`pdf-parse-x preview server: http://localhost:${port}`);
-});
+const isMain =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  app.listen(port, () => {
+    console.log(`pdf-parse-x preview server: http://localhost:${port}`);
+  });
+}
+
+export { app };

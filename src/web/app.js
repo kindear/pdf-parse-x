@@ -9,9 +9,21 @@ const progressPercent = document.getElementById('progressPercent');
 const progressLabel = document.getElementById('progressLabel');
 const statusBox = document.getElementById('statusBox');
 const translateToggle = document.getElementById('translateToggle');
+const mcpConfig = document.getElementById('mcpConfig');
+const mcpModes = document.getElementById('mcpModes');
+const mcpUrlRow = document.getElementById('mcpUrlRow');
+const mcpUrl = document.getElementById('mcpUrl');
+const mcpAuthNote = document.getElementById('mcpAuthNote');
+const copyMcpUrlButton = document.getElementById('copyMcpUrlButton');
+const copyMcpButton = document.getElementById('copyMcpButton');
+const copyHint = document.getElementById('copyHint');
+const apiCount = document.getElementById('apiCount');
+const apiTableBody = document.getElementById('apiTableBody');
 
 let busy = false;
 let progressStream = null;
+let meta = null;
+let mcpMode = 'http';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -168,8 +180,8 @@ function documentCard(document) {
         <div class="card-stat"><strong>${escapeHtml(document.pages)}</strong><span>页数</span></div>
       </div>
       <div class="card-actions">
-        <a class="button primary" href="${escapeHtml(document.previewUrl)}">打开预览</a>
-        ${document.hasChinese ? `<a class="button" href="${escapeHtml(document.chinesePreviewUrl)}">中文预览</a>` : `<button class="button" type="button" data-translate="${escapeHtml(document.id)}">翻译中文</button>`}
+        <a class="button primary" href="${escapeHtml(document.previewUrl)}" target="_blank" rel="noopener">打开预览</a>
+        ${document.hasChinese ? `<a class="button" href="${escapeHtml(document.chinesePreviewUrl)}" target="_blank" rel="noopener">中文预览</a>` : `<a class="button" href="/translate/${encodeURIComponent(document.id)}" target="_blank" rel="noopener">翻译中文</a>`}
         <a class="button" href="${escapeHtml(document.markdownUrl)}" download>下载 MD</a>
         <button class="button danger" type="button" data-delete="${escapeHtml(document.id)}">删除</button>
       </div>
@@ -228,7 +240,7 @@ function uploadFile(file) {
   formData.append('translate', translateToggle?.checked ? 'true' : 'false');
 
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/convert');
+  xhr.open('POST', '/api/documents');
 
   xhr.upload.addEventListener('progress', (event) => {
     if (event.lengthComputable) {
@@ -254,7 +266,7 @@ function uploadFile(file) {
         'success',
         `转换完成：<strong>${escapeHtml(payload.title || file.name)}</strong><br>
          ${escapeHtml(summaryLine(payload.report, performance.now() - startedAt))}<br>
-         <a href="${escapeHtml(payload.previewUrl)}">打开 Markdown 预览 →</a>`
+         <a href="${escapeHtml(payload.previewUrl)}" target="_blank" rel="noopener">打开 Markdown 预览 →</a>`
       );
       await loadDocuments();
     } else {
@@ -306,7 +318,7 @@ sampleButton.addEventListener('click', async () => {
   const progressId = beginProgressStream('正在解析示例 PDF…');
 
   try {
-    const response = await fetch('/api/convert-sample', {
+    const response = await fetch('/api/documents/sample', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -321,7 +333,7 @@ sampleButton.addEventListener('click', async () => {
       'success',
       `示例转换完成：<strong>${escapeHtml(payload.title || '示例文档')}</strong><br>
        ${escapeHtml(summaryLine(payload.report, performance.now() - startedAt))}<br>
-       <a href="${escapeHtml(payload.previewUrl)}">打开 Markdown 预览 →</a>`
+       <a href="${escapeHtml(payload.previewUrl)}" target="_blank" rel="noopener">打开 Markdown 预览 →</a>`
     );
     await loadDocuments();
   } catch (error) {
@@ -332,53 +344,115 @@ sampleButton.addEventListener('click', async () => {
   }
 });
 
-async function translateDocument(id) {
-  if (busy || !id) return;
+// 翻译在独立标签页完成，通过 BroadcastChannel 通知列表刷新。
+if (typeof BroadcastChannel === 'function') {
+  const translationChannel = new BroadcastChannel('pdf-parse-x');
+  translationChannel.addEventListener('message', (event) => {
+    if (event.data?.type === 'pdf-parse-x:translated') loadDocuments();
+  });
+}
 
-  clearStatus();
-  setBusy(true, '正在翻译…');
-  const startedAt = performance.now();
-  const progressId = beginProgressStream('正在翻译…');
+function endpointRow(endpoint) {
+  const method = String(endpoint.method ?? '').toUpperCase();
+  const path = escapeHtml(endpoint.path).replaceAll('/', '/<wbr>');
+  return `<tr>
+    <td><span class="api-method method-${method.toLowerCase()}">${escapeHtml(method)}</span></td>
+    <td><code>${path}</code></td>
+    <td>${escapeHtml(endpoint.description)}</td>
+  </tr>`;
+}
 
+function renderMcpConfig() {
+  if (!mcpConfig) return;
+  const config = meta?.mcp?.[mcpMode]?.generic;
+  const http = meta?.mcp?.http;
+  mcpConfig.textContent = config ? JSON.stringify(config, null, 2) : 'npm run mcp';
+
+  if (mcpUrlRow) mcpUrlRow.hidden = mcpMode !== 'http';
+  if (mcpUrl) mcpUrl.textContent = http?.url ?? 'http://localhost:3000/mcp';
+  if (mcpAuthNote) mcpAuthNote.hidden = !(mcpMode === 'http' && http?.authRequired);
+}
+
+async function copyToClipboard(text) {
   try {
-    const response = await fetch(
-      `/api/documents/${encodeURIComponent(id)}/translate`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ progressId })
-      }
-    );
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || '翻译失败。');
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the selection-based copy for plain HTTP clients.
+  }
 
-    setProgress(100);
-    showStatus(
-      'success',
-      `中文版已生成：${escapeHtml(payload.translated)}/${escapeHtml(payload.total)} 段 · ${escapeHtml(
-        formatDuration(performance.now() - startedAt)
-      )}<br><a href="${escapeHtml(payload.chinesePreviewUrl)}">打开中文预览 →</a>`
-    );
-    await loadDocuments();
-  } catch (error) {
-    showStatus('error', escapeHtml(error.message));
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.top = '-9999px';
+  document.body.append(area);
+  area.select();
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
   } finally {
-    endProgressStream();
-    setBusy(false);
+    area.remove();
   }
 }
+
+async function loadMeta() {
+  try {
+    const response = await fetch('/api/meta');
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || '读取接口目录失败。');
+    meta = payload;
+    if (apiCount) apiCount.textContent = `${payload.endpoints?.length ?? 0} 个接口`;
+    if (apiTableBody) {
+      apiTableBody.innerHTML = (payload.endpoints ?? []).map(endpointRow).join('');
+    }
+    renderMcpConfig();
+  } catch {
+    if (apiCount) apiCount.textContent = '接口目录不可用';
+    renderMcpConfig();
+  }
+}
+
+mcpModes?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-mcp-mode]');
+  if (!button) return;
+  mcpMode = button.getAttribute('data-mcp-mode');
+  for (const tab of mcpModes.querySelectorAll('[data-mcp-mode]')) {
+    tab.classList.toggle('is-active', tab === button);
+  }
+  if (copyHint) copyHint.textContent = '';
+  renderMcpConfig();
+});
+
+copyMcpUrlButton?.addEventListener('click', async () => {
+  const copied = await copyToClipboard(mcpUrl?.textContent ?? '');
+  if (copyHint) {
+    copyHint.textContent = copied ? 'URL 已复制' : '复制失败，请手动选择';
+    window.setTimeout(() => {
+      if (copyHint) copyHint.textContent = '';
+    }, 1800);
+  }
+});
+
+copyMcpButton?.addEventListener('click', async () => {
+  const text = mcpConfig?.textContent ?? 'npm run mcp';
+  const copied = await copyToClipboard(text);
+  if (copyHint) {
+    copyHint.textContent = copied ? '已复制' : '复制失败，请手动选择';
+    window.setTimeout(() => {
+      if (copyHint) copyHint.textContent = '';
+    }, 1800);
+  }
+});
 
 refreshButton.addEventListener('click', () => {
   loadDocuments();
 });
 
 documentGrid.addEventListener('click', async (event) => {
-  const translateButton = event.target.closest('[data-translate]');
-  if (translateButton) {
-    await translateDocument(translateButton.getAttribute('data-translate'));
-    return;
-  }
-
   const button = event.target.closest('[data-delete]');
   if (!button) return;
   const id = button.getAttribute('data-delete');
@@ -401,3 +475,4 @@ documentGrid.addEventListener('click', async (event) => {
 });
 
 loadDocuments();
+loadMeta();

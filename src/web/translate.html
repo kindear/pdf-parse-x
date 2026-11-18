@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>生成中文版 · pdf-parse-x</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="page-glow page-glow-one"></div>
+  <div class="page-glow page-glow-two"></div>
+
+  <header class="site-header">
+    <a class="brand" href="/">
+      <span class="brand-mark">P</span>
+      <span>
+        <strong>pdf-parse-x</strong>
+        <small>PDF → Markdown Studio</small>
+      </span>
+    </a>
+    <div class="header-note">
+      <span class="pulse-dot"></span>
+      中文翻译
+    </div>
+  </header>
+
+  <main class="page translate-page">
+    <section class="upload-card translate-card" aria-live="polite">
+      <div class="upload-card-head">
+        <span class="step-badge">ZH</span>
+        <div>
+          <h2 id="translateTitle">正在生成中文版…</h2>
+          <p id="translateSubtitle">请保持此页面打开，完成后会自动跳转到中文预览。</p>
+        </div>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-meta">
+          <span id="progressLabel">正在准备…</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="progress-track"><div id="progressBar"></div></div>
+      </div>
+
+      <div class="status-box" id="statusBox" hidden></div>
+
+      <div class="translate-actions">
+        <a class="button" href="/">返回文档列表</a>
+        <button class="button" id="retryButton" type="button" hidden>重试</button>
+        <a class="button primary" id="previewLink" href="#" hidden>打开中文预览</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>pdf-parse-x · local-first PDF conversion</span>
+    <span>中文版由配置的模型生成</span>
+  </footer>
+
+  <script src="/translate.js" type="module"></script>
+</body>
+</html>

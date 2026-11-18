@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "pdf-parse-x": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/src/mcp.js"],
+      "cwd": "${workspaceFolder}"
+    },
+    "pdf-parse-x-remote": {
+      "type": "http",
+      "url": "http://localhost:3000/mcp"
+    }
+  }
+}

@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "mcp": "node src/mcp.js",
     "convert": "node src/cli.js",
     "convert:sample": "node src/cli.js pdfs/software-05-00038.pdf output/software-05-00038",
     "test": "node --test"
@@ -25,6 +26,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "dotenv": "^18.0.10",
     "express": "^5.3.0",
     "katex": "^0.16.25",
@@ -33,7 +35,8 @@
     "pdf-parse": "^2.4.5",
     "pdfjs-dist": "^5.4.296",
     "sanitize-html": "^2.18.2",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.19.2"
