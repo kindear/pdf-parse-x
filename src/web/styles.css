@@ -486,6 +486,26 @@ code {
   margin-bottom: 7px;
 }
 
+.section-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.list-hint {
+  padding: 4px 8px;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.list-hint[hidden] {
+  display: none;
+}
+
 .document-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

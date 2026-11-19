@@ -89,6 +89,10 @@ test('GET /api/meta exposes MCP config and the endpoint catalog', async () => {
   assert.equal(meta.mcp.http.authRequired, false);
   assert.ok(meta.endpoints.some((endpoint) => endpoint.path === '/api/documents'));
   assert.ok(meta.endpoints.some((endpoint) => endpoint.path === '/api/documents/:id/formulas'));
+  assert.ok(meta.endpoints.every((endpoint) => !endpoint.internal));
+  for (const path of ['/api/documents/sample', '/api/meta', '/api/openapi.json', '/mcp']) {
+    assert.ok(!meta.endpoints.some((endpoint) => endpoint.path === path));
+  }
 });
 
 test('MCP is available over Streamable HTTP', async () => {
@@ -135,7 +139,7 @@ test('MCP HTTP honours MCP_HTTP_TOKEN', async () => {
   }
 });
 
-test('GET /api/openapi.json describes the REST and MCP surface', async () => {
+test('GET /api/openapi.json describes the public REST surface', async () => {
   const response = await fetch(`${base}/api/openapi.json`);
   assert.equal(response.status, 200);
   const document = await response.json();
@@ -150,7 +154,9 @@ test('GET /api/openapi.json describes the REST and MCP surface', async () => {
   assert.ok(
     document.paths['/api/documents'].post.requestBody.content['multipart/form-data']
   );
-  assert.ok(document.paths['/mcp'].post);
+  for (const path of ['/mcp', '/api/documents/sample', '/api/meta', '/api/openapi.json']) {
+    assert.equal(document.paths[path], undefined);
+  }
 });
 
 test('document detail and sub-resources are RESTful', async () => {  const detail = await (await fetch(`${base}/api/documents/doc-a`)).json();
@@ -267,6 +273,8 @@ test('POST /api/documents converts a PDF end to end', async () => {
   assert.ok(created.id);
   assert.equal(response.headers.get('location'), `/api/documents/${created.id}`);
   assert.equal(created.pages, 22);
+  assert.equal(created.sourceFile, 'sample.pdf');
+  assert.ok(created.generatedAt);
 
   const markdown = await fetch(`${base}/api/documents/${created.id}/markdown`);
   assert.equal(markdown.status, 200);

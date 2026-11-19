@@ -1,4 +1,4 @@
-import { API_ENDPOINTS } from './api-catalog.js';
+import { PUBLIC_API_ENDPOINTS } from './api-catalog.js';
 
 const JSON_CONTENT = 'application/json';
 
@@ -7,11 +7,7 @@ function toOpenApiPath(path) {
 }
 
 function tagFor(path) {
-  if (path === '/mcp') return 'MCP';
-  if (path === '/api/meta' || path === '/api/openapi.json') return 'Meta';
-  if (path.startsWith('/preview') || path.startsWith('/translate')) return 'Pages';
   if (path.includes('/translation') || path.endsWith('/translate')) return 'Translation';
-  if (path.startsWith('/api/progress')) return 'Progress';
   return 'Documents';
 }
 
@@ -60,23 +56,6 @@ function requestBodyFor(endpoint) {
     };
   }
 
-  if (endpoint.path === '/api/documents/sample') {
-    return {
-      required: false,
-      content: {
-        [JSON_CONTENT]: {
-          schema: {
-            type: 'object',
-            properties: {
-              translate: { type: 'boolean' },
-              progressId: { type: 'string' }
-            }
-          }
-        }
-      }
-    };
-  }
-
   if (endpoint.path === '/api/documents/:id/translation') {
     return {
       required: false,
@@ -86,17 +65,6 @@ function requestBodyFor(endpoint) {
             type: 'object',
             properties: { progressId: { type: 'string' } }
           }
-        }
-      }
-    };
-  }
-
-  if (endpoint.path === '/mcp') {
-    return {
-      required: true,
-      content: {
-        [JSON_CONTENT]: {
-          schema: { type: 'object', description: 'JSON-RPC 2.0 MCP 消息' }
         }
       }
     };
@@ -118,27 +86,11 @@ function successContent(endpoint) {
   if (endpoint.path === '/api/documents/:id/markdown') {
     return { 'text/markdown': { schema: { type: 'string' } } };
   }
-  if (endpoint.path === '/api/progress/:id') {
-    return { 'text/event-stream': { schema: { type: 'string' } } };
-  }
-  if (endpoint.path === '/mcp') {
-    return {
-      [JSON_CONTENT]: { schema: { type: 'object' } },
-      'text/event-stream': { schema: { type: 'string' } }
-    };
-  }
-  if (endpoint.path.startsWith('/preview') || endpoint.path.startsWith('/translate')) {
-    return { 'text/html': { schema: { type: 'string' } } };
-  }
   return { [JSON_CONTENT]: { schema: { type: 'object' } } };
 }
 
 function responsesFor(endpoint) {
-  const status =
-    endpoint.method === 'POST' &&
-    (endpoint.path === '/api/documents' || endpoint.path === '/api/documents/sample')
-      ? '201'
-      : '200';
+  const status = endpoint.method === 'POST' && endpoint.path === '/api/documents' ? '201' : '200';
   const responses = {
     [status]: { description: '成功', content: successContent(endpoint) }
   };
@@ -146,16 +98,13 @@ function responsesFor(endpoint) {
     responses['400'] = errorResponse('参数错误');
     responses['404'] = errorResponse('文档不存在');
   }
-  if (endpoint.path === '/mcp') {
-    responses['401'] = errorResponse('访问令牌无效');
-  }
   return responses;
 }
 
-export function buildOpenApi({ baseUrl, version = '1.0.0', mcpAuthRequired = false } = {}) {
+export function buildOpenApi({ baseUrl, version = '1.0.0' } = {}) {
   const paths = {};
 
-  for (const endpoint of API_ENDPOINTS) {
+  for (const endpoint of PUBLIC_API_ENDPOINTS) {
     const path = toOpenApiPath(endpoint.path);
     const operation = {
       summary: endpoint.description,
@@ -166,9 +115,6 @@ export function buildOpenApi({ baseUrl, version = '1.0.0', mcpAuthRequired = fal
     if (parameters.length) operation.parameters = parameters;
     const requestBody = requestBodyFor(endpoint);
     if (requestBody) operation.requestBody = requestBody;
-    if (endpoint.path === '/mcp' && mcpAuthRequired) {
-      operation.security = [{ bearerAuth: [] }];
-    }
 
     paths[path] ??= {};
     paths[path][endpoint.method.toLowerCase()] = operation;
@@ -179,25 +125,12 @@ export function buildOpenApi({ baseUrl, version = '1.0.0', mcpAuthRequired = fal
     info: {
       title: 'pdf-parse-x API',
       version,
-      description:
-        'PDF → Markdown converter REST API，以及供远程客户端使用的 MCP Streamable HTTP 端点。'
+      description: 'PDF → Markdown converter REST API。'
     },
     servers: baseUrl ? [{ url: baseUrl }] : [],
-    tags: [
-      { name: 'Documents' },
-      { name: 'Translation' },
-      { name: 'Meta' },
-      { name: 'Progress' },
-      { name: 'Pages' },
-      { name: 'MCP' }
-    ],
+    tags: [{ name: 'Documents' }, { name: 'Translation' }],
     paths,
     components: {
-      securitySchemes: {
-        ...(mcpAuthRequired
-          ? { bearerAuth: { type: 'http', scheme: 'bearer' } }
-          : {})
-      },
       schemas: {
         Error: {
           type: 'object',

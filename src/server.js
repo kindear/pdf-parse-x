@@ -25,7 +25,7 @@ import {
 } from './lib/document-service.js';
 import { buildPreviewHtml, collectResources } from './lib/preview.js';
 import { createConsoleProgress } from './lib/progress.js';
-import { API_ENDPOINTS } from './lib/api-catalog.js';
+import { PUBLIC_API_ENDPOINTS } from './lib/api-catalog.js';
 import { buildOpenApi } from './lib/openapi.js';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -200,8 +200,7 @@ app.get('/api/openapi.json', (request, response) => {
   response.json(
     buildOpenApi({
       baseUrl: requestBaseUrl(request),
-      version: packageInfo.version ?? '1.0.0',
-      mcpAuthRequired: Boolean(process.env.MCP_HTTP_TOKEN)
+      version: packageInfo.version ?? '1.0.0'
     })
   );
 });
@@ -246,7 +245,7 @@ app.get('/api/meta', (request, response) => {
       stdio,
       http
     },
-    endpoints: API_ENDPOINTS
+    endpoints: PUBLIC_API_ENDPOINTS
   });
 });
 

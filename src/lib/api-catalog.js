@@ -12,7 +12,8 @@ export const API_ENDPOINTS = Object.freeze([
   {
     method: 'POST',
     path: '/api/documents/sample',
-    description: '转换工作区示例 PDF；可选 translate、progressId'
+    description: '转换工作区示例 PDF；可选 translate、progressId',
+    internal: true
   },
   {
     method: 'GET',
@@ -62,31 +63,42 @@ export const API_ENDPOINTS = Object.freeze([
   {
     method: 'GET',
     path: '/api/meta',
-    description: 'MCP 配置（stdio / HTTP）与接口目录'
+    description: 'MCP 配置（stdio / HTTP）与接口目录',
+    internal: true
   },
   {
     method: 'GET',
     path: '/api/openapi.json',
-    description: 'OpenAPI 3.1 规范'
+    description: 'OpenAPI 3.1 规范',
+    internal: true
   },
   {
     method: 'POST',
     path: '/mcp',
-    description: 'MCP Streamable HTTP 端点，支持远程调用'
+    description: 'MCP Streamable HTTP 端点，支持远程调用',
+    internal: true
   },
   {
     method: 'GET',
     path: '/api/progress/:id',
-    description: 'SSE 进度流（progress / done）'
+    description: 'SSE 进度流（progress / done）',
+    internal: true
   },
   {
     method: 'GET',
     path: '/preview/:id',
-    description: 'HTML 预览页；?lang=zh 切换中文'
+    description: 'HTML 预览页；?lang=zh 切换中文',
+    internal: true
   },
   {
     method: 'GET',
     path: '/translate/:id',
-    description: '独立翻译页面'
+    description: '独立翻译页面',
+    internal: true
   }
 ]);
+
+/** 首页目录与 OpenAPI 只展示公开接口；internal 接口保持可调用。 */
+export const PUBLIC_API_ENDPOINTS = Object.freeze(
+  API_ENDPOINTS.filter((endpoint) => !endpoint.internal)
+);

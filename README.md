@@ -43,6 +43,7 @@ flowchart LR
 | **参考文献** | 支持 IEEE `[1]`、MDPI `1.` 与作者-年份格式，跨页续行并回同一条目 |
 | **中文翻译** | 按子章节批量生成 `main_zh.md`，保留结构、公式、链接与格式 |
 | **实时预览** | 服务端渲染 `main.md`：KaTeX 公式、目录、图片灯箱、表格原图、中英切换 |
+| **本地记录** | 解析记录同步到浏览器 IndexedDB：列表秒开，服务暂不可用时回看最近同步结果 |
 | **集成接口** | REST API 与 MCP（stdio / HTTP），共用同一文档层 |
 
 ## 快速开始
@@ -131,7 +132,7 @@ output/<document>/
 | `FIGURE_LLM_ENABLED` | `false` | 坐标规则无法关联图片时由模型定位 |
 | `TRANSLATE_ENABLED` | `false` | 每次转换都生成中文版；平时按需触发 |
 | `PERSIST_PREVIEW` | `false` | 额外生成静态 `preview.html` |
-| `MCP_HTTP_TOKEN` | — | 设置后 `/mcp` 需携带 Bearer Token |
+| `MCP_HTTP_TOKEN` | — | 设置后 `/mcp` 需携带 Bearer Token（REST 不受影响） |
 | `PDF_PARSE_X_OUTPUT` | `output` | 文档输出目录 |
 
 > 不填 `LLM_*` 时转换完全离线，公式回退为 PDF 原图裁剪。模型输出的 LaTeX 必须通过 KaTeX 校验。
@@ -144,21 +145,24 @@ output/<document>/
 | --- | --- | --- |
 | `GET` | `/api/documents` | 文档列表 |
 | `POST` | `/api/documents` | 上传并转换（multipart：`pdf`，可选 `translate`） |
-| `POST` | `/api/documents/sample` | 转换示例 PDF |
 | `GET` | `/api/documents/:id` | 摘要、元数据、报告与资源 |
 | `GET` | `/api/documents/:id/markdown` | 正文；`?lang=zh` 读取中文版 |
+| `GET` | `/api/documents/:id/metadata` | PDF 元数据 |
 | `GET` | `/api/documents/:id/report` | 完整性报告 |
 | `GET` | `/api/documents/:id/formulas` | 公式 LaTeX 与来源 |
+| `GET` | `/api/documents/:id/resources` | 图片、表格与文件清单 |
+| `GET` | `/api/documents/:id/translation` | 翻译状态与中文版 URL |
 | `PUT` | `/api/documents/:id/translation` | 生成或刷新中文版 |
 | `DELETE` | `/api/documents/:id` | 删除文档及资源 |
-| `GET` | `/preview/:id` | HTML 预览（`?lang=zh`） |
-| `GET` | `/api/openapi.json` | OpenAPI 3.1 规范 |
-| `POST` | `/mcp` | MCP Streamable HTTP 端点 |
+
+> 以上为公开接口目录，首页与 `openapi.json` 只展示这些接口。示例转换、进度流、预览/翻译页与 `/api/meta`、`/api/openapi.json`、`/mcp` 仍可调用，但不列入公开目录。
 
 ```bash
 curl -F "pdf=@paper.pdf" -F "translate=true" http://localhost:3000/api/documents
 curl "http://localhost:3000/api/documents/<id>/markdown?lang=zh" -o main_zh.md
 ```
+
+> REST 接口默认不校验令牌，适合本机使用；远程 MCP 可通过 `MCP_HTTP_TOKEN` 开启 Bearer 校验。
 
 ## MCP
 

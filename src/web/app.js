@@ -1,7 +1,15 @@
+import {
+  deleteRecord,
+  readRecords,
+  replaceRecords,
+  upsertRecord
+} from './records-db.js';
+
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('pdfInput');
 const sampleButton = document.getElementById('sampleButton');
 const refreshButton = document.getElementById('refreshButton');
+const listHint = document.getElementById('listHint');
 const documentGrid = document.getElementById('documentGrid');
 const progressWrap = document.getElementById('progressWrap');
 const progressBar = document.getElementById('progressBar');
@@ -199,18 +207,38 @@ function renderEmpty() {
   `;
 }
 
+function renderDocuments(documents) {
+  if (!documents.length) {
+    renderEmpty();
+    return;
+  }
+  documentGrid.innerHTML = documents.map(documentCard).join('');
+}
+
+function setListHint(text) {
+  if (!listHint) return;
+  listHint.textContent = text;
+  listHint.hidden = !text;
+}
+
 async function loadDocuments() {
+  // IndexedDB 记录先渲染，服务端返回后再覆盖缓存；服务不可用时仍可回看。
+  const cached = await readRecords();
+  if (cached.length) renderDocuments(cached);
+
   try {
     const response = await fetch('/api/documents');
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || '读取文档列表失败。');
     const documents = payload.documents ?? [];
-    if (!documents.length) {
-      renderEmpty();
+    await replaceRecords(documents);
+    renderDocuments(documents);
+    setListHint('');
+  } catch (error) {
+    if (cached.length) {
+      setListHint('本地缓存');
       return;
     }
-    documentGrid.innerHTML = documents.map(documentCard).join('');
-  } catch (error) {
     documentGrid.innerHTML = `
       <div class="empty-state">
         <div class="empty-orbit"></div>
@@ -268,6 +296,7 @@ function uploadFile(file) {
          ${escapeHtml(summaryLine(payload.report, performance.now() - startedAt))}<br>
          <a href="${escapeHtml(payload.previewUrl)}" target="_blank" rel="noopener">打开 Markdown 预览 →</a>`
       );
+      await upsertRecord(payload);
       await loadDocuments();
     } else {
       showStatus('error', escapeHtml(payload.error || '转换失败，请检查 PDF 是否有效。'));
@@ -335,6 +364,7 @@ sampleButton.addEventListener('click', async () => {
        ${escapeHtml(summaryLine(payload.report, performance.now() - startedAt))}<br>
        <a href="${escapeHtml(payload.previewUrl)}" target="_blank" rel="noopener">打开 Markdown 预览 →</a>`
     );
+    await upsertRecord(payload);
     await loadDocuments();
   } catch (error) {
     showStatus('error', escapeHtml(error.message));
@@ -466,6 +496,7 @@ documentGrid.addEventListener('click', async (event) => {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || '删除失败。');
+    await deleteRecord(id);
     await loadDocuments();
     showStatus('success', '文档已删除。');
   } catch (error) {

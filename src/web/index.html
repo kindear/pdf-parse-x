@@ -91,7 +91,10 @@
           <p class="eyebrow">Workspace</p>
           <h2>已转换文档</h2>
         </div>
-        <button class="button ghost" id="refreshButton" type="button">刷新列表</button>
+        <div class="section-tools">
+          <span class="list-hint" id="listHint" hidden>本地缓存</span>
+          <button class="button ghost" id="refreshButton" type="button">刷新列表</button>
+        </div>
       </div>
 
       <div class="document-grid" id="documentGrid">
@@ -148,7 +151,7 @@
               <span class="dev-chip" id="apiCount">读取中…</span>
             </div>
           </div>
-          <p>所有文档接口只使用路径参数；上传与翻译支持可选字段。</p>
+          <p>仅展示公开文档接口；默认无令牌，适合本机调用。</p>
 
           <div class="api-table-wrap" id="apiTableWrap">
             <table class="api-table">
